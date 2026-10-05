@@ -418,4 +418,10 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   average of reciprocal intervals with simulated/wall elapsed time across 20 intervals,
   clearing history at flight/pause boundaries. Physics and scheduling are unchanged.
   All 50 public/web/camera/altitude Python tests pass, including the timing regression;
-  the telemetry correction passed GPT-5.6 Sol review and awaits its final cloud deploy.
+  the telemetry correction passed GPT-5.6 Sol review.
+- Final application commit 7b85097 deployed successfully at 15:56 UTC (Render deploy
+  dep-db1sgsqjnfac73eep52g). The public browser flight reached 1.02 m for a 1 m target
+  and displayed 1.00x real time; health returned OK and browser/Render error logs were
+  empty. The displayed flight was reset to paused t=0, height=0, target=0 for handoff.
+  This brief check is not a concurrency or latency guarantee for the Free plan.
+  Final screenshot: results/web_gui_render_live.jpg (local artifact, not served).
