@@ -16,6 +16,7 @@ function fixture(t, profile = makeProfile()) {
   const oldDocument = globalThis.document;
   const elements = new Map();
   const downloads = [];
+  const created = [];
   const context = { fills: [], fillRect(...args) { this.fills.push(args); } };
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
@@ -30,9 +31,12 @@ function fixture(t, profile = makeProfile()) {
     });
     return elements.get(id);
   };
-  globalThis.document = { getElementById: element, createElement: (tag) => element(`created-${tag}-${elements.size}`) };
+  globalThis.document = { getElementById: element, createElement: (tag) => {
+    created.push(tag);
+    return element(`created-${tag}-${elements.size}`);
+  } };
   t.after(() => { globalThis.document = oldDocument; });
-  const f = { element, context, downloads, configured: [], rendered: [], sent: [], control: true,
+  const f = { element, context, downloads, created, configured: [], rendered: [], sent: [], control: true,
     config: { camera: profile, dt_ctrl: 0.05 },
     state: { camera: { profile }, generation: 3, control_step: 0, t: 0, altitude: 1,
       camera_recording: { status: 'empty', frames: 0, seconds: 0 } } };
@@ -290,5 +294,22 @@ test('session replacement clears old camera data and cancels an in-flight export
   await exporting;
   assert.equal(f.panel.exporting, false);
   assert.equal(f.element('sensor-error').textContent, '');
+  assert.equal(f.downloads.length, 0);
+});
+
+test('session expiry during response decoding prevents old-session rendering', async (t) => {
+  const f = fixture(t);
+  f.state = { ...f.state, camera_recording: { status: 'ready', frames: 3, seconds: 0.2 } };
+  let decode;
+  f.panel.request = async () => ({ ok: true, json: () => new Promise((resolve) => { decode = resolve; }) });
+  const exporting = f.panel.downloadRecording();
+  await Promise.resolve();
+  f.panel.resetSession();
+  decode({}); // Without the cancellation check this would enter the renderer with old data.
+  await exporting;
+  assert.deepEqual(f.created, [], 'an expired response must not create a recording renderer');
+  assert.equal(f.panel.exporting, false);
+  assert.equal(f.element('sensor-error').textContent, '');
+  assert.equal(f.element('sensor-export-status').textContent, '');
   assert.equal(f.downloads.length, 0);
 });

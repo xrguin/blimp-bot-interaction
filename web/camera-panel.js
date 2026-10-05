@@ -253,6 +253,7 @@ export class CameraPanel {
       if (sessionVersion !== this.sessionVersion) throw new Error('The flight session changed');
       if (!response.ok) throw new Error((await response.json()).detail || 'Recording is unavailable');
       const recording = await response.json();
+      if (this.cancelExport || sessionVersion !== this.sessionVersion) throw new Error('Export cancelled');
       const canvas = document.createElement('canvas');
       const config = { ...this.getConfig(), geometry: recording.geometry, arena: recording.arena,
         n_rovers: recording.frames[0]?.rover_q.length || 0, camera: recording.profile };
@@ -276,6 +277,7 @@ export class CameraPanel {
           relative_t: frame.t - recording.frames[0].t, control_step: frame.control_step,
           relative_control_step: frame.control_step - recording.frames[0].control_step,
           transitions_to_next_frame: actionIndices, camera: rendered });
+        if (this.cancelExport || sessionVersion !== this.sessionVersion) throw new Error('Export cancelled');
         $('sensor-export-status').textContent = `Preparing images ${i + 1} / ${recording.frames.length}…`;
         await nextPaint();
       }
