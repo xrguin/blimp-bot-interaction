@@ -403,3 +403,19 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   to a fresh paused state. The stale expiry notice after restart was repaired.
   The native browser timer wrapper regression is retained. Public host/origin rules
   are tested separately from the loopback-only browser adapter.
+- Created blimp-bot-simulator in the confirmed My Workspace using the Render Free plan
+  in Ohio, two public sessions, one worker and auto-deploy off. Service ID:
+  srv-db1sc1bncjis73c5jp20; public address https://blimp-bot-simulator.onrender.com.
+  The first build deployed a34a37a on codex/render-demo and became live at 15:46 UTC.
+  The final camera-expiry race fix passed Sol review; all 26 JavaScript tests pass.
+- Verified two independent cloud visitors: one reached 2 m and recorded 301 camera
+  frames while the other remained paused at ground level; both then flew independently.
+  The browser generated the synchronized camera ZIP; the OS-saved archive was not inspected.
+  Cloud checks passed for health, unauthorized-export rejection, origin validation,
+  two-session capacity, and unavailable repository/results routes. No browser or Render
+  errors were observed during these checks.
+- Cloud QA exposed a biased speed readout under uneven server scheduling. Replaced the
+  average of reciprocal intervals with simulated/wall elapsed time across 20 intervals,
+  clearing history at flight/pause boundaries. Physics and scheduling are unchanged.
+  All 50 public/web/camera/altitude Python tests pass, including the timing regression;
+  the telemetry correction passed GPT-5.6 Sol review and awaits its final cloud deploy.

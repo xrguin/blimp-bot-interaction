@@ -89,6 +89,8 @@ Browser-backend checks (the extra dependency is only needed for testing):
 
 ## Online demo on Render Free
 
+Public address: **https://blimp-bot-simulator.onrender.com**.
+
 Public hosting is explicitly enabled with `BLIMP_PUBLIC=1`; the local launcher above
 continues to work offline. Each public page gets a separate paused flight and camera
 recording. The repository remains private, and only `web/` assets and the session APIs

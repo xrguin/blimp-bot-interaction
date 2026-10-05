@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from collections import deque
 from concurrent.futures import Future
 from dataclasses import asdict
 import io
@@ -136,6 +137,8 @@ class SimulationRuntime:
         self.seq = 0
         self.error = None
         self.realtime_factor = 0.0
+        self._realtime_intervals = deque(maxlen=20)
+        self._realtime_last_step = None
         self._last_keys = float("-inf")
         self._commands = queue.Queue(maxsize=256)
         self._lock = threading.Lock()
@@ -167,8 +170,23 @@ class SimulationRuntime:
             self.keyboard.on_pid_toggle(self.P.task.pid_enabled)
         self.paused = True
         self.error = None
-        self.realtime_factor = 0.0
+        self._reset_realtime_factor()
         self.generation += 1
+
+    def _reset_realtime_factor(self):
+        self._realtime_intervals.clear()
+        self._realtime_last_step = None
+        self.realtime_factor = 0.0
+
+    def _record_step_timing(self, completed_at):
+        """Measure simulated/wall elapsed time, avoiding reciprocal-average bias."""
+        if self.paused:
+            self._reset_realtime_factor()
+            return
+        if self._realtime_last_step is not None:
+            self._realtime_intervals.append(max(completed_at - self._realtime_last_step, 1e-6))
+            self.realtime_factor = len(self._realtime_intervals) * self.P.dt_ctrl / sum(self._realtime_intervals)
+        self._realtime_last_step = completed_at
 
     def _clear_keys(self):
         self.keyboard.pressed.clear()
@@ -205,6 +223,8 @@ class SimulationRuntime:
                 raise ValueError("Reset the simulation before resuming after an error")
             if self.limit_message and not command["value"]:
                 raise ValueError(self.limit_message)
+            if self.paused != command["value"] or command["value"]:
+                self._reset_realtime_factor()
             self.paused = command["value"]
             self._clear_keys()
         elif action == "reset":
@@ -228,6 +248,7 @@ class SimulationRuntime:
                 self.camera_recording.finish("disconnect")
             self._clear_keys()
             self.paused = True
+            self._reset_realtime_factor()
         elif action == "camera_config":
             if self.camera_recording is not None and self.camera_recording.active:
                 raise ValueError("Stop camera recording before changing its profile")
@@ -288,6 +309,7 @@ class SimulationRuntime:
 
     def _reach_log_limit(self):
         self.paused = True
+        self._reset_realtime_factor()
         self._clear_keys()
         self.limit_message = f"This flight reached its {self.max_log_steps:,}-step recording limit. Download your data, then Reset to fly again."
         if self.camera_recording is not None:
@@ -429,7 +451,7 @@ class SimulationRuntime:
 
     def _run(self):
         next_step = time.monotonic() + self.P.dt_ctrl
-        last_step = None
+        self._reset_realtime_factor()
         while not self._stop.is_set():
             self._wake.clear()
             now = time.monotonic()
@@ -456,14 +478,11 @@ class SimulationRuntime:
             now = time.monotonic()
             if self.paused:
                 next_step = now + self.P.dt_ctrl
-                last_step = None
+                self._reset_realtime_factor()
             elif now >= next_step:
                 try:
                     self._step()
-                    interval = now - last_step if last_step is not None else self.P.dt_ctrl
-                    instant_factor = self.P.dt_ctrl / max(interval, 1e-6)
-                    self.realtime_factor = instant_factor if not self.realtime_factor else 0.9 * self.realtime_factor + 0.1 * instant_factor
-                    last_step = now
+                    self._record_step_timing(time.monotonic())
                     self._make_state()
                 except Exception:
                     # A step changes clocks, rovers, RNG, actuator/disturbance
@@ -471,7 +490,6 @@ class SimulationRuntime:
                     # instead of publishing a partially rolled-back session.
                     self._reset(recording_reason="numerical_error")
                     self.error = "Simulation reset and paused after a numerical error; session log cleared. Press Reset to continue."
-                    last_step = None
                 # Preserve the fixed step; avoid replaying an unbounded backlog.
                 next_step += self.P.dt_ctrl
                 if next_step < time.monotonic():
