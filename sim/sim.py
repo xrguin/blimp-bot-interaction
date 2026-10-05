@@ -24,7 +24,7 @@ class TeamSim:
         self.k = 0
         self.decim = max(1, int(round(self.P.dt_ctrl / self.P.dt_phys)))
         self.set_controllers(CircleTracker(self.P.task, len(self.rovers)), BlimpPD(self.P.task, dt=self.P.dt_ctrl))
-        self.log = {"t": [], "blimp_eta": [], "blimp_nu": [], "blimp_u": [], "blimp_thrust": [], "blimp_lift": [],
+        self.log = {"t": [], "blimp_eta": [], "blimp_nu": [], "blimp_u": [], "blimp_thrust": [], "blimp_lift": [], "blimp_bottom_altitude": [],
                     "rover_q": [], "rover_u": [], "rover_ref": []}
 
     def set_controllers(self, rover_ctrl, blimp_ctrl):
@@ -45,8 +45,6 @@ class TeamSim:
         for c in (self.rover_ctrl, self.blimp_ctrl):
             if hasattr(c, "reset"):
                 c.reset()
-        if blimp_eta0 is None:
-            blimp_eta0 = np.array([tk.circle_center[0] + 1.0, tk.circle_center[1] - 1.0, -0.6, 0.0, 0.0, 0.0])
         self.blimp.reset(eta=blimp_eta0)
         for i, r in enumerate(self.rovers):
             pos, vel = self.rover_ctrl.reference(i, 0.0)
@@ -90,6 +88,7 @@ class TeamSim:
         L = self.log
         L["t"].append(self.t); L["blimp_eta"].append(self.blimp.eta.copy()); L["blimp_nu"].append(self.blimp.nu.copy())
         L["blimp_u"].append(np.asarray(u_b).copy()); L["blimp_thrust"].append(self.blimp.thrust.copy()); L["blimp_lift"].append(float(self.blimp.lift))
+        L["blimp_bottom_altitude"].append(float(self.blimp.altitude))
         L["rover_q"].append(np.array([r.q for r in self.rovers])); L["rover_u"].append(u_r.copy()); L["rover_ref"].append(refs)
 
     def logs(self):
@@ -103,4 +102,8 @@ class TeamSim:
         np.savez(path, t=L["t"][:-1],
                  X=nu[:-1], U=ub[:-1], X_next=nu[1:], Eta=eta[:-1], Eta_next=eta[1:],
                  rover_X=q[:-1], rover_U=ur[:-1], rover_X_next=q[1:], rover_ref=L["rover_ref"][:-1],
-                 blimp_thrust=L["blimp_thrust"][:-1], blimp_lift=L["blimp_lift"][:-1], dt=self.P.dt_ctrl, n_rovers=len(self.rovers), seed=self.P.seed)
+                 blimp_thrust=L["blimp_thrust"][:-1], blimp_lift=L["blimp_lift"][:-1],
+                 blimp_bottom_altitude=L["blimp_bottom_altitude"][:-1], blimp_bottom_altitude_next=L["blimp_bottom_altitude"][1:],
+                 eta_reference="CV_NED", altitude_reference="gondola_bottom", gondola_size=self.P.blimp.gondola_size,
+                 thruster_length=self.P.blimp.thruster_length, thruster_radius=self.P.blimp.thruster_radius, d_VT=self.P.blimp.d_VT,
+                 dt=self.P.dt_ctrl, n_rovers=len(self.rovers), seed=self.P.seed)

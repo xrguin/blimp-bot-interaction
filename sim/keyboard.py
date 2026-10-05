@@ -1,11 +1,11 @@
-"""Keyboard teleop for the blimp with the SAME key map as the BlueROV teleop
+"""Keyboard teleop for the blimp, adapted from BlueROV teleop
 (underwater-manipulation-isaac-6/EDMDc/teleop_tank.py): hold-to-move, 4-axis command
 [surge, sway, heave, yaw] in [-1, 1], scaled by a gain.
 
     W / S      surge forward / back
     A / D      sway left / right          (A = +sway = LEFT as piloted)
     Q / E      heave up / down            (Q = +heave = UP; --heave-keys eq swaps to E up / Q down)
-    R / F      yaw left / right           (F = +yaw = RIGHT, i.e. r > 0)
+    F / R      yaw left / right           (R = +yaw = RIGHT, i.e. r > 0)
     + / -      command gain up / down (0.1 .. 1.0)
     Space      panic: clear all held keys (zero command)
     P          screenshot of the viewer
@@ -23,13 +23,13 @@ import numpy as np
 from .blimp import Blimp
 from .controllers import BlimpPD
 
-# (axis, key, sign) — surge/sway/yaw as teleop_tank.AXIS_KEYS; heave: Q = up, E = down (user's choice,
-# 2026-10-04; teleop_tank.py itself has E up / Q down -> --heave-keys eq)
+# (axis, key, sign) — surge/sway as teleop_tank.AXIS_KEYS; user-selected heave Q up / E down
+# and yaw F left / R right. --heave-keys eq swaps only the heave keys.
 AXIS_KEYS = (
     (0, "w", +1.0), (0, "s", -1.0),     # surge
     (1, "a", +1.0), (1, "d", -1.0),     # sway  (A = left)
     (2, "q", +1.0), (2, "e", -1.0),     # heave (Q = up)
-    (3, "f", +1.0), (3, "r", -1.0),     # yaw   (F = right)
+    (3, "f", -1.0), (3, "r", +1.0),     # yaw   (F = left, R = right)
 )
 
 
@@ -70,6 +70,8 @@ class KeyboardBlimpController:
         self.running = True
         self.capture_requested = False
         self.cmd4 = np.zeros(4)
+        self._altitude_target = None      # explicit GUI request; survives hold toggles and reset
+        self._held_altitude = None        # captured gondola-bottom clearance, independent of attitude
         self.rebuild()
 
     def rebuild(self):
@@ -103,13 +105,57 @@ class KeyboardBlimpController:
         self.pressed.discard((key or "").lower())
 
     def reset(self):
-        """Sim reset: drop held keys and the captured hold reference (re-captured on the next command)."""
+        """Drop held keys and captured pose; retain an explicitly selected altitude."""
         self.pressed.clear()
         self.cmd4 = np.zeros(4)
+        self._held_altitude = None
         if self.hold is not None:
             self.hold.reset()
             self.hold.p_ref_override = None
             self.hold.yaw_ref_override = None
+
+    @property
+    def desired_altitude(self):
+        """Requested/held gondola-bottom clearance in metres."""
+        if self.hold is None:
+            return None
+        if self._altitude_target is not None:
+            return self._altitude_target
+        if self._held_altitude is not None:
+            return self._held_altitude
+        return float(self.hold.task.blimp_height)
+
+    def set_altitude_target(self, height: float):
+        """Select an altitude without enabling hold or changing its horizontal/yaw target.
+
+        When hold is off, apply the request on its next capture. Manual heave cancels
+        the explicit request and restores the usual hold-at-release behaviour.
+        """
+        height = float(height)
+        if not np.isfinite(height):
+            raise ValueError("Altitude must be finite")
+        if self.hold is None:
+            raise ValueError("Altitude targets require a hold controller")
+        self._altitude_target = height
+        self.hold.task.blimp_height = height
+        self.hold.e_int[2] = 0.0
+        if self.hold.task.pid_enabled:
+            if self.hold.p_ref_override is None:
+                self._capture_hold_reference()
+            self._apply_altitude_target()
+
+    def _apply_altitude_target(self):
+        # Recompute z even for a captured hold: keeping a fixed CM/CV z as
+        # attitude changes would change the clearance beneath the gondola.
+        self.hold.p_ref_override[2] = self.hold.altitude_reference_z(self.blimp, self.desired_altitude)
+
+    def _capture_hold_reference(self):
+        p, _, _ = self.hold.controlled_point(self.blimp)
+        self.hold.p_ref_override = p.copy()
+        self.hold.yaw_ref_override = float(self.blimp.eta[5])
+        self._held_altitude = self.blimp.altitude
+        self._apply_altitude_target()
+        self.hold.task.blimp_height = self.desired_altitude
 
     def on_pid_toggle(self, enabled: bool):
         """Capture 'hold where you are' when the PID assist is switched on."""
@@ -117,9 +163,7 @@ class KeyboardBlimpController:
             return
         self.hold.reset()
         if enabled:
-            p, _, _ = self.hold.controlled_point(self.blimp)
-            self.hold.p_ref_override = p.copy()
-            self.hold.yaw_ref_override = float(self.blimp.eta[5])
+            self._capture_hold_reference()
 
     # ----- controller interface -----------------------------------------------------
     def current_cmd4(self) -> np.ndarray:
@@ -134,19 +178,23 @@ class KeyboardBlimpController:
     def command(self, blimp: Blimp, cmd4=None):
         self.cmd4 = self.current_cmd4() if cmd4 is None else np.asarray(cmd4, float)
         wrench = cmd4_to_body_wrench_dir(self.cmd4) * np.array([self.authority[0], self.authority[1], self.authority[2], 0, 0, self.authority[3]])
+        if abs(self.cmd4[2]) > 0:
+            self._altitude_target = None
         if self.hold is not None and self.hold.task.pid_enabled:
             # PID hold assist: axes with a key held are manual (and their hold reference follows the
             # vehicle); idle axes are held by the PID at the last captured reference.
             p, _, R = self.hold.controlled_point(blimp)
             if self.hold.p_ref_override is None:
-                self.hold.p_ref_override = p.copy(); self.hold.yaw_ref_override = float(blimp.eta[5])
+                self._capture_hold_reference()
             manual_xy = abs(self.cmd4[0]) > 0 or abs(self.cmd4[1]) > 0
             if manual_xy:
                 self.hold.p_ref_override[:2] = p[:2]
             if abs(self.cmd4[2]) > 0:
-                self.hold.p_ref_override[2] = p[2]
+                self._held_altitude = blimp.altitude
+            self._apply_altitude_target()
             if abs(self.cmd4[3]) > 0:
                 self.hold.yaw_ref_override = float(blimp.eta[5])
+            self.hold.task.blimp_height = self.desired_altitude
             w_pid = self.hold.wrench(blimp)
             if not manual_xy:
                 wrench[0], wrench[1] = w_pid[0], w_pid[1]

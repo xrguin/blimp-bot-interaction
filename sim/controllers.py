@@ -72,10 +72,14 @@ class BlimpPD:
         if self.p_ref_override is not None:
             p_ref = np.asarray(self.p_ref_override, float)
         else:
-            zoff = blimp.p.d_VM if self.use_cm else 0.0
-            p_ref = np.array([tk.circle_center[0], tk.circle_center[1], -tk.blimp_height + zoff])
+            p_ref = np.array([tk.circle_center[0], tk.circle_center[1], self.altitude_reference_z(blimp, tk.blimp_height)])
         yaw_ref = tk.blimp_yaw_ref if self.yaw_ref_override is None else self.yaw_ref_override
         return p_ref, yaw_ref
+
+    def altitude_reference_z(self, blimp: Blimp, height: float):
+        """Convert bottom clearance into the controlled CM/CV's current-attitude z."""
+        cm_offset = R_zyx(*blimp.eta[3:6])[2, 2] * blimp.p.d_VM if self.use_cm else 0.0
+        return -float(height) - blimp.gondola_bottom_offset() + cm_offset
 
     def wrench(self, blimp: Blimp) -> np.ndarray:
         """PID body wrench [Fx, Fy, Fz, 0, 0, Tz] without commanding the thrusters."""

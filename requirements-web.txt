@@ -1,0 +1,5 @@
+# Tested with Python 3.11. Install once; no internet is needed to run the GUI.
+numpy==2.0.0
+fastapi==0.142.2
+uvicorn==0.54.0
+websockets==16.1.1

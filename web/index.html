@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Blimp Team Console</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <p class="eyebrow">Local simulation</p>
+          <h1>Blimp Team Console</h1>
+        </div>
+      </div>
+      <div class="connection-block" aria-live="polite">
+        <span id="connection-dot" class="status-dot offline"></span>
+        <span id="connection-text">Connecting…</span>
+        <span id="control-badge" class="badge muted">Waiting</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="visual-column" aria-label="Simulation view">
+        <div id="scene-panel" class="scene-panel">
+          <canvas id="scene-canvas" tabindex="0" aria-label="Three-dimensional blimp and rover scene"></canvas>
+          <div class="scene-overlay scene-title">
+            <span class="eyebrow">Live world</span>
+            <strong id="sim-time">0.0 s</strong>
+          </div>
+          <div class="scene-overlay scene-actions">
+            <button id="camera-reset" type="button" class="icon-button" title="Reset camera">Reset view</button>
+            <button id="capture-scene" type="button" class="icon-button" title="Save scene image">PNG <kbd>P</kbd></button>
+          </div>
+          <div id="scene-error" class="scene-error" hidden>
+            <strong>3D view unavailable</strong>
+            <span>The controls and telemetry remain available.</span>
+          </div>
+          <div class="legend" aria-label="Scene legend">
+            <span><i class="legend-swatch blimp"></i>Blimp</span>
+            <span><i class="legend-swatch rover"></i>Rovers</span>
+            <span><i class="legend-line force"></i>Thruster force</span>
+            <span><i class="legend-line reference"></i>Reference</span>
+          </div>
+        </div>
+
+        <section class="instrument-grid" aria-label="Vehicle information">
+          <article class="instrument altitude-card">
+            <p class="eyebrow">Altitude · gondola bottom</p>
+            <div class="altitude-row">
+              <div><strong id="altitude-value" class="hero-value">0.00</strong><span class="unit">m</span></div>
+              <label for="desired-altitude">Desired clearance</label>
+              <div class="field-shell large-field">
+                <input id="desired-altitude" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="Desired gondola clearance above ground" aria-describedby="desired-altitude-error">
+                <span>m</span>
+              </div>
+            </div>
+            <p id="desired-altitude-error" class="field-error" aria-live="polite"></p>
+          </article>
+
+          <article class="instrument attitude-card">
+            <p class="eyebrow">Attitude</p>
+            <div class="attitude-display" aria-hidden="true">
+              <div class="attitude-clip"><div id="attitude-horizon" class="attitude-horizon"><span class="sky"></span><span class="ground"></span><span class="horizon-line"></span></div></div>
+              <span class="wing left"></span><span class="wing right"></span><span class="nose"></span>
+            </div>
+            <div class="attitude-numbers"><span>R <b id="roll-value">+0.0°</b></span><span>P <b id="pitch-value">+0.0°</b></span><span>Y <b id="yaw-value">+0.0°</b></span></div>
+          </article>
+
+          <article class="instrument telemetry-card">
+            <p class="eyebrow">Motion</p>
+            <dl class="telemetry-list">
+              <div><dt>Position (x, y, height)</dt><dd id="position-value">0.00, 0.00, 0.00 m</dd></div>
+              <div><dt>Body velocity (u, v, w)</dt><dd id="velocity-value">0.00, 0.00, 0.00 m/s</dd></div>
+              <div><dt>Manual input (surge, sway, heave, yaw)</dt><dd id="command-value">0.00, 0.00, 0.00, 0.00</dd></div>
+            </dl>
+          </article>
+
+          <article class="instrument telemetry-card">
+            <p class="eyebrow">Forces</p>
+            <dl class="telemetry-list">
+              <div><dt>Net lift (+ up / − down)</dt><dd id="lift-value">0.00 g equiv.</dd></div>
+              <div><dt>Thruster force (world x, y, z)</dt><dd id="force-value">0.000, 0.000, 0.000 N</dd></div>
+              <div><dt>Real time</dt><dd id="realtime-value">—</dd></div>
+            </dl>
+          </article>
+        </section>
+      </section>
+
+      <aside class="control-sidebar" aria-label="Simulation controls">
+        <section class="control-card primary-controls">
+          <div class="section-heading"><div><p class="eyebrow">Run control</p><h2>Flight</h2></div><span id="run-state" class="badge paused">Paused</span></div>
+          <div class="segmented-row">
+            <fieldset><legend>Mode</legend><div class="segmented"><input id="mode-teleop" name="mode" value="teleop" type="radio" checked><label for="mode-teleop">Teleop</label><input id="mode-auto" name="mode" value="auto" type="radio"><label for="mode-auto">Auto</label></div></fieldset>
+            <fieldset><legend>Rovers</legend><div class="segmented"><input id="rovers-circle" name="rovers" value="circle" type="radio" checked><label for="rovers-circle">Circle</label><input id="rovers-idle" name="rovers" value="idle" type="radio"><label for="rovers-idle">Idle</label></div></fieldset>
+          </div>
+          <div class="switch-row">
+            <label class="switch-control"><input id="pid-toggle" type="checkbox" checked><span class="switch"></span><span>PID hold</span><kbd>H</kbd></label>
+            <button id="pause-toggle" type="button" class="button run-toggle" aria-pressed="false">Run</button>
+          </div>
+          <div class="gain-row">
+            <label for="gain-input">Manual gain</label>
+            <button id="gain-down" type="button" class="step-button" aria-label="Decrease manual gain">−</button>
+            <input id="gain-input" type="number" min="0.1" max="1" step="0.1" value="0.4">
+            <button id="gain-up" type="button" class="step-button" aria-label="Increase manual gain">+</button>
+          </div>
+          <div class="action-row">
+            <button id="release-button" type="button" class="button secondary">Release controls <kbd>Space</kbd></button>
+            <button id="reset-button" type="button" class="button danger">Reset</button>
+          </div>
+          <a id="download-log" class="button download" href="/api/log.npz" download>Download NPZ log</a>
+          <p id="command-error" class="command-error" aria-live="polite"></p>
+        </section>
+
+        <section class="key-guide" aria-label="Keyboard controls">
+          <div><kbd>W</kbd><kbd>S</kbd><span>Surge</span></div><div><kbd>A</kbd><kbd>D</kbd><span>Sway</span></div>
+          <div><kbd>Q</kbd><kbd>E</kbd><span>Up / down</span></div><div><kbd>F</kbd><kbd>R</kbd><span>Rotate left / right</span></div>
+        </section>
+
+        <section class="parameter-card">
+          <div class="section-heading sticky-heading"><div><p class="eyebrow">Live parameters</p><h2>Tuning</h2></div><span id="parameter-count" class="badge muted">—</span></div>
+          <div id="parameter-groups" class="parameter-groups" aria-live="polite"></div>
+        </section>
+      </aside>
+    </main>
+  </div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

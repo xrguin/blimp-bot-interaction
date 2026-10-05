@@ -22,7 +22,7 @@ def run(net_lift, ki, drift=0.0, T=80.0, seed=0):
     sim = TeamSim(P)
     sim.reset()
     L = sim.run(T)
-    return L["t"], -L["blimp_eta"][:, 2], L["blimp_thrust"][:, 4] + L["blimp_thrust"][:, 5], L["blimp_lift"]
+    return L["t"], L["blimp_bottom_altitude"], L["blimp_thrust"][:, 4] + L["blimp_thrust"][:, 5], L["blimp_lift"]
 
 
 def main():
@@ -37,7 +37,7 @@ def main():
         axs[0].plot(t, alt, color=col, label=name)
         axs[1].plot(t, Fz, color=col, label=name)
         axs[2].plot(t, lift, color=col, label=name)
-    axs[0].axhline(1.0, color="k", ls=":", lw=0.8); axs[0].set_ylabel("altitude (m)")
+    axs[0].axhline(1.0, color="k", ls=":", lw=0.8); axs[0].set_ylabel("gondola clearance (m)")
     axs[1].set_ylabel("vertical thrust, sum of both props (N)")
     axs[2].set_ylabel("net lift B − W (N)")
     for ax in axs:

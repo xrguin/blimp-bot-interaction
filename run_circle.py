@@ -19,7 +19,7 @@ def summary_plots(L, path, P):
     t = L["t"]; eta = L["blimp_eta"]; tk = P.task
     fig, axs = plt.subplots(2, 3, figsize=(14, 7))
     ax = axs[0, 0]
-    ax.plot(t, eta[:, 0], label="x"); ax.plot(t, eta[:, 1], label="y"); ax.plot(t, -eta[:, 2], label="altitude")
+    ax.plot(t, eta[:, 0], label="x"); ax.plot(t, eta[:, 1], label="y"); ax.plot(t, L["blimp_bottom_altitude"], label="gondola clearance")
     ax.axhline(tk.circle_center[0], color="k", ls=":", lw=0.8); ax.axhline(tk.blimp_height, color="k", ls=":", lw=0.8)
     ax.set_title("blimp position (m)"); ax.set_xlabel("t (s)"); ax.legend(frameon=False)
     ax = axs[0, 1]
@@ -98,7 +98,7 @@ def main():
         os.makedirs(os.path.dirname(a.npz) or ".", exist_ok=True)
         sim.save_npz(a.npz)
     eta = L["blimp_eta"]
-    print(f"final blimp pos {eta[-1,:2].round(3)} alt {-eta[-1,2]:.3f} m, max |pitch| {np.degrees(np.abs(eta[:,4]).max()):.1f} deg")
+    print(f"final blimp pos {eta[-1,:2].round(3)} gondola clearance {L['blimp_bottom_altitude'][-1]:.3f} m, max |pitch| {np.degrees(np.abs(eta[:,4]).max()):.1f} deg")
 
 
 if __name__ == "__main__":

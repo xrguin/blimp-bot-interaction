@@ -1,31 +1,35 @@
-"""3D matplotlib viewer with live parameter sliders (GUI) or headless video rendering.
+"""3D matplotlib viewer with live sliders/numeric fields or headless video rendering.
 
-Layout (GUI, 16 x 9 in):
+Layout (GUI, 16 x 10 in):
 
     +------------------------------+-----------------+----------------------------+
     |                              |  attitude HUD   |  [ PID / HOLD : ON ]       |
     |        3D scene              |  heading tape   |  [ RESET ]  [ PAUSE ]      |
     |   blimp, rovers, forces      |  stick boxes    |  -- blimp physics --       |
     |                              |                 |  sliders ...               |
-    |                              |  telemetry      |  -- controller / task --   |
-    |                              |  (monospace)    |  sliders ...               |
+    |                              |                 |  -- controller / task --   |
+    |                              |                 |  sliders + number fields   |
     |                              |                 |  -- view --                |
     +------------------------------+-----------------+----------------------------+
+    | vehicle information: altitude / target, motion, forces | controls continued |
+    | teleop command and keyboard hints (when enabled)       |                    |
     | legend / status bar                                                         |
     +-----------------------------------------------------------------------------+
 
-Display frame is ENU-like for readability: X = x (north), Y = y (east), Z = altitude = -z.
+Display frame is ENU-like for readability: X = x (north), Y = y (east), Z = CV height = -z.
+Altitude readouts report the lowest gondola-assembly clearance above the ground.
 """
 from __future__ import annotations
 
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, Button
+from matplotlib.widgets import Slider, Button, TextBox
 from matplotlib import animation
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from .blimp import R_zyx
-from .params import SLIDERS
+from .params import G, SLIDERS
 from .sim import TeamSim
 
 PAL = dict(blimp="#2a78d6", gond="#0b0b0b", rover=["#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#4a3aa7", "#e34948", "#008300", "#2a78d6"],
@@ -143,10 +147,9 @@ class Viewer:
     """
 
     # figure-fraction geometry (GUI): 3D | HUD column | control panel
-    GUI_FIG = (16, 9)
-    GUI_3D = [-0.035, 0.05, 0.515, 0.95]       # right edge at 0.495: keeps the z-axis labels clear of the HUD column
-    GUI_HUD = [0.52, 0.40, 0.19, 0.58]
-    GUI_TELEM = (0.525, 0.375)
+    GUI_FIG = (16, 10)
+    GUI_3D = [-0.035, 0.33, 0.515, 0.67]
+    GUI_HUD = [0.505, 0.36, 0.20, 0.62]
     GUI_PANEL_X0, GUI_PANEL_X1 = 0.715, 0.995
     VID_FIG = (12, 7.2)
     VID_3D = [-0.02, 0.05, 0.67, 0.94]
@@ -164,23 +167,27 @@ class Viewer:
         self.trails = [[] for _ in sim.rovers]
         self.artists = []
         self.sliders = []
+        self.value_inputs = []
         self.paused = False
         self.extra_lines = None
         self.on_reset = []
         self.reset_eta0 = None
         self._static()
         self.hud = HUD(self.fig, self.GUI_HUD if gui else self.VID_HUD)
-        tx, ty = self.GUI_TELEM if gui else self.VID_TELEM
-        self.telemetry = self.fig.text(tx, ty, "", ha="left", va="top", fontsize=8.5, family="monospace", color=PAL["ink"], linespacing=1.35)
         if gui:
             self._build_panel()
+            self._build_vehicle_info()
+        else:
+            tx, ty = self.VID_TELEM
+            self.telemetry = self.fig.text(tx, ty, "", ha="left", va="top", fontsize=8.5,
+                                           family="monospace", color=PAL["ink"], linespacing=1.35)
 
     # ------------------------------------------------------------- static scene
     def _static(self):
         ax, A = self.ax, self.sim.P.arena / 2
         ax.set_xlim(-A, A); ax.set_ylim(-A, A); ax.set_zlim(0, 3.0)
         ax.set_box_aspect((1, 1, 0.5), zoom=1.06)      # slight zoom; matplotlib pads 3D axes heavily
-        ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)"); ax.set_zlabel("altitude (m)")
+        ax.set_xlabel("x (m)"); ax.set_ylabel("y (m)"); ax.set_zlabel("height above ground (m)")
         ax.tick_params(labelsize=8)
         tk = self.sim.P.task
         ang = np.linspace(0, 2 * np.pi, 100)
@@ -219,9 +226,12 @@ class Viewer:
         self.pause_btn.label.set_fontsize(9)
         self.pause_btn.on_clicked(lambda _ev: self.set_paused(not self.paused))
         self._refresh_buttons()
-        # --- grouped sliders
+        # --- grouped sliders with exact numeric entry
         label_w = 0.085                      # room for the slider name on the left
-        sx0, sw, sh, gap = x0 + label_w, x1 - x0 - label_w - 0.045, 0.015, 0.0295
+        input_w, input_gap = 0.065, 0.010
+        sx0, sh, gap = x0 + label_w, 0.015, 0.0295
+        input_x = x1 - input_w
+        sw = input_x - input_gap - sx0
         y = y_btn - 0.045
         for header, obj in SLIDER_GROUPS:
             self._panel_header(y, header)
@@ -231,18 +241,154 @@ class Viewer:
                     continue
                 axs = self.fig.add_axes([sx0, y, sw, sh])
                 target = getattr(self.sim.P, obj)
-                s = Slider(axs, name, lo, hi, valinit=getattr(target, name), valfmt="%.3g", color="#2a78d6", track_color="#e6e5e1")
-                s.label.set_fontsize(8); s.valtext.set_fontsize(8)
+                display_name = "net lift (g)" if name == "net_lift_g" else name
+                s = Slider(axs, display_name, lo, hi, valinit=getattr(target, name), valfmt="%.3g", color="#2a78d6", track_color="#e6e5e1")
+                s.label.set_fontsize(8)
+                s.valtext.set_visible(False)
+                box = TextBox(self.fig.add_axes([input_x, y - 0.003, input_w, sh + 0.006]), "",
+                              initial=f"{s.val:.10g}", color=PAL["panel"], hovercolor="white")
+                box.text_disp.set_fontsize(8)
+                for spine in box.ax.spines.values():
+                    spine.set_edgecolor("#c3c2b7")
+                self.value_inputs.append(box)
 
-                def on_change(val, target=target, name=name):
+                def on_change(val, target=target, name=name, box=box):
                     setattr(target, name, float(val))
                     self.sim.blimp.rebuild()
+                    self._sync_value_input(box, val)
                 s.on_changed(on_change)
+                box.on_submit(lambda text, s=s, box=box: self._submit_value(s, box, text))
                 self.sliders.append(s)
                 y -= gap
             y -= 0.012
-        self.fig.text(x0, max(y, 0.065), "sliders act immediately (every physics step)   •   keys: H = PID on/off",
+        self.fig.text(x0, max(y, 0.065), "Drag or type a value • Enter to apply • Click outside to use keys",
                       fontsize=7.5, color=PAL["dim"], va="bottom")
+
+    def _build_vehicle_info(self):
+        """A wide, readable instrument strip below the scene and attitude display."""
+        from matplotlib.patches import FancyBboxPatch
+
+        def label(x, y, text, size=10, **kwargs):
+            return self.fig.text(x, y, text, fontsize=size, color=PAL["dim"], va="center", **kwargs)
+
+        def value(x, y, size=12):
+            return self.fig.text(x, y, "", fontsize=size, color=PAL["ink"], va="center")
+
+        label(0.025, 0.307, "VEHICLE INFORMATION", 11, fontweight="bold")
+        self.vehicle_status = label(0.700, 0.307, "", ha="right")
+        for x, width in ((0.025, 0.185), (0.220, 0.232), (0.462, 0.238)):
+            self.fig.add_artist(FancyBboxPatch((x, 0.103), width, 0.184,
+                                boxstyle="round,pad=0.006,rounding_size=0.008",
+                                transform=self.fig.transFigure, facecolor="#f3f5f7",
+                                edgecolor="#dddfe2", linewidth=0.8, zorder=-1))
+
+        label(0.036, 0.265, "GONDOLA CLEARANCE", fontweight="bold")
+        self.altitude_readout = value(0.036, 0.225, 26)
+        label(0.036, 0.172, "Desired clearance (m)")
+        self.altitude_input = TextBox(self.fig.add_axes([0.142, 0.151, 0.061, 0.041]), "",
+                                      initial=f"{self.sim.P.task.blimp_height:.10g}", color="white",
+                                      hovercolor="#e8f1fc")
+        self.altitude_input.text_disp.set_fontsize(14)
+        for spine in self.altitude_input.ax.spines.values():
+            spine.set_edgecolor(PAL["blimp"])
+        self.value_inputs.append(self.altitude_input)
+        self.height_slider = next(s for s in self.sliders if s.label.get_text() == "blimp_height")
+        self.height_input = self.value_inputs[self.sliders.index(self.height_slider)]
+        self.height_slider.on_changed(lambda val: self._sync_value_input(self.altitude_input, val))
+        self.height_slider.on_changed(self._set_altitude_target)
+        self.altitude_input.on_submit(lambda text: self._submit_value(self.height_slider, self.altitude_input, text))
+        label(0.036, 0.123, f"{self.height_slider.valmin:g}–{self.height_slider.valmax:g} m  •  Enter to apply", 9)
+
+        self.vehicle_values = {}
+        for key, y, heading in (("position", 0.265, "POSITION: X, Y, HEIGHT (m)"),
+                                ("velocity", 0.209, "BODY VELOCITY (m/s)"),
+                                ("attitude", 0.153, "ATTITUDE (deg)")):
+            label(0.231, y, heading, fontweight="bold")
+            self.vehicle_values[key] = value(0.231, y - 0.027, 12)
+        label(0.473, 0.265, "THRUST / LIFT", fontweight="bold")
+        for key, y in (("lift", 0.235), ("thrust", 0.207), ("force_xy", 0.179), ("force_up", 0.151)):
+            self.vehicle_values[key] = value(0.473, y, 12)
+        self.vehicle_values["force_scale"] = value(0.473, 0.122, 10)
+        self.telemetry_extra = self.fig.text(0.025, 0.090, "", fontsize=10, color=PAL["ink"],
+                                             va="top", linespacing=1.35)
+
+    def _set_altitude_target(self, value):
+        controller = self.sim.blimp_ctrl
+        if hasattr(controller, "set_altitude_target"):
+            controller.set_altitude_target(float(value))
+
+    def _update_vehicle_info(self, force):
+        b, tk = self.sim.blimp, self.sim.P.task
+        self._refresh_altitude_controls()
+        roll, pitch, yaw = np.degrees(b.eta[3:6])
+        self.altitude_readout.set_text(f"{b.altitude:.2f} m")
+        mode = "PAUSED" if self.paused else "RUNNING"
+        self.vehicle_status.set_text(f"{self.sim.t:.1f} s   •   {mode}   •   HOLD {'ON' if tk.pid_enabled else 'OFF'}")
+        self.vehicle_status.set_color(PAL["on"] if tk.pid_enabled else PAL["dim"])
+        values = {
+            "position": f"{b.eta[0]:+.2f}    {b.eta[1]:+.2f}    {b.altitude:.2f}",
+            "velocity": f"u  {b.nu[0]:+.2f}    v  {b.nu[1]:+.2f}    w  {b.nu[2]:+.2f}",
+            "attitude": f"Roll {roll:+.1f}   Pitch {pitch:+.1f}   Yaw {yaw:+.1f}",
+            "lift": f"Net lift (+ up)  {1000 * b.lift / G:+.2f} g equiv.",
+            "thrust": f"Max per thruster    {b.p.T_max:.3f} N",
+            "force_xy": f"Thruster Fx  {force[0]:+.3f}   Fy  {force[1]:+.3f} N",
+            "force_up": f"Thruster upward      {-force[2]:+.3f} N",
+            "force_scale": f"Arrow scale  {self.sim.P.view.force_scale:g} m/N",
+        }
+        for name, text in values.items():
+            self.vehicle_values[name].set_text(text)
+        self.telemetry_extra.set_text("\n".join(self.extra_lines()) if self.extra_lines else "")
+
+    def _refresh_altitude_controls(self):
+        # Teleop can capture a new hold height after manual flight or a hold toggle.
+        value = float(self.sim.P.task.blimp_height)
+        if self.altitude_input.capturekeystrokes or self.height_input.capturekeystrokes:
+            return
+        slider = self.height_slider
+        if value == slider.val:
+            return
+        eventson = slider.eventson
+        slider.eventson = False
+        try:
+            # Captured manual heights may lie beyond the limits for typed targets.
+            # Keep the handle on its track, while the fields report the true target.
+            slider.set_val(np.clip(value, slider.valmin, slider.valmax))
+            slider.val = value
+        finally:
+            slider.eventson = eventson
+        self._sync_value_input(self.height_input, value)
+        self._sync_value_input(self.altitude_input, value)
+
+    @property
+    def text_input_active(self):
+        """Entry points must leave keyboard events to a focused numeric field."""
+        return any(box.capturekeystrokes for box in self.value_inputs)
+
+    def _sync_value_input(self, box, value):
+        # TextBox.set_val also submits: suppress that callback during slider sync.
+        eventson = box.eventson
+        box.eventson = False
+        try:
+            if box.capturekeystrokes:
+                box.set_val(f"{value:.10g}")
+            else:
+                box.text_disp.set_text(f"{value:.10g}")
+            box.cursor_index = min(box.cursor_index, len(box.text))
+            box.cursor.set_visible(box.capturekeystrokes)
+        finally:
+            box.eventson = eventson
+        self.fig.canvas.draw_idle()
+
+    def _submit_value(self, slider, box, text):
+        try:
+            value = float(text)
+        except ValueError:
+            value = np.nan
+        if np.isfinite(value) and slider.valmin <= value <= slider.valmax:
+            # Reuse every existing callback, including teleop thrust-authority updates.
+            slider.set_val(value)
+        else:
+            self._sync_value_input(box, slider.val)
 
     def _refresh_buttons(self):
         if not hasattr(self, "pid_btn"):
@@ -270,6 +416,8 @@ class Viewer:
 
     def on_key(self, ev):
         """Default key bindings for the scenario GUI (teleop installs its own handler instead)."""
+        if self.text_input_active:
+            return
         k = (ev.key or "").lower()
         if k == "h":
             self.set_pid(not self.sim.P.task.pid_enabled)
@@ -293,11 +441,11 @@ class Viewer:
         R_, P_, Y_ = np.degrees(b.eta[3:6])
         lines = [
             f"t     {sim.t:7.1f} s        PID/hold {'ON ' if tk.pid_enabled else 'OFF'}",
-            f"alt   {b.altitude:6.2f} m   ref {tk.blimp_height:4.2f} m",
+            f"clear {b.altitude:6.2f} m   ref {tk.blimp_height:4.2f} m",
             f"pos   x {b.eta[0]:+6.2f}  y {b.eta[1]:+6.2f} m",
             f"vel   u {b.nu[0]:+5.2f}  v {b.nu[1]:+5.2f}  w {b.nu[2]:+5.2f} m/s",
             f"att   R {R_:+6.1f}  P {P_:+6.1f}  Y {Y_:+6.1f} deg",
-            f"lift  B-W {b.lift:+.3f} N   T_max {b.p.T_max:.3f} N",
+            f"lift  {1000 * b.lift / G:+.2f} g equiv. (+ up)   T_max {b.p.T_max:.3f} N",
             f"F@CV  Fx {F_w[0]:+.3f}  Fy {F_w[1]:+.3f}  Fz(up) {-F_w[2]:+.3f} N",
             f"arrow scale {self.sim.P.view.force_scale:.0f} m/N",
         ]
@@ -318,15 +466,44 @@ class Viewer:
         pts = self.mesh0 @ R.T + b.eta[:3]
         X, Y, Z = pts[..., 0], pts[..., 1], -pts[..., 2]
         self.artists.append(ax.plot_wireframe(X, Y, Z, color=PAL["blimp"], lw=0.6, alpha=0.8))
-        # gondola / thrust plane
+        # Gondola box: shared geometry dimensions are body x length, y width, z height.
         g = b.eta[:3] + R @ np.array([0, 0, b.p.d_VT])
         self.artists += ax.plot([b.eta[0], g[0]], [b.eta[1], g[1]], [-b.eta[2], -g[2]], color=PAL["gond"], lw=2)
-        self.artists += ax.plot([g[0]], [g[1]], [-g[2]], "s", color=PAL["gond"], ms=5)
-        # thrusters as short lines along realised thrust
+        gx, gy, gz = b.p.gondola_size
+        corners = np.array([[sx * gx / 2, sy * gy / 2, b.p.d_VT + sz * gz / 2]
+                            for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+        corners_w = corners @ R.T + b.eta[:3]
+        corners_d = np.column_stack((corners_w[:, 0], corners_w[:, 1], -corners_w[:, 2]))
+        faces = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1],
+                 [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]]
+        gondola = Poly3DCollection([corners_d[idx] for idx in faces], facecolor="#303b40",
+                                   edgecolor=PAL["gond"], linewidth=0.7, alpha=0.85)
+        ax.add_collection3d(gondola)
+        self.artists.append(gondola)
+        # Six motor housings use the same 0.13 m length and 0.025 m radius as the browser scene.
         for i in range(6):
             pw = b.eta[:3] + R @ b.pos[i]
-            fw = R @ (b.axes[i] * b.thrust[i] / max(b.p.T_max, 1e-9) * 0.25)
-            self.artists += ax.plot([pw[0], pw[0] + fw[0]], [pw[1], pw[1] + fw[1]], [-pw[2], -pw[2] - fw[2]], color="#e34948", lw=1.5)
+            axis = b.axes[i] / max(np.linalg.norm(b.axes[i]), 1e-12)
+            basis = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.8 else np.array([0.0, 1.0, 0.0])
+            side1 = np.cross(axis, basis); side1 /= np.linalg.norm(side1)
+            side2 = np.cross(axis, side1)
+            angles = np.linspace(0, 2 * np.pi, 9)
+            rings = []
+            half_length = b.p.thruster_length / 2
+            for offset in (-half_length, half_length):
+                ring_b = (b.pos[i] + offset * axis
+                          + b.p.thruster_radius * (np.cos(angles)[:, None] * side1 + np.sin(angles)[:, None] * side2))
+                ring_w = ring_b @ R.T + b.eta[:3]
+                rings.append(ring_w)
+            X = np.vstack([rings[0][:, 0], rings[1][:, 0]])
+            Y = np.vstack([rings[0][:, 1], rings[1][:, 1]])
+            Z = -np.vstack([rings[0][:, 2], rings[1][:, 2]])
+            self.artists.append(ax.plot_wireframe(X, Y, Z, color=PAL["gond"], lw=0.55, alpha=0.9))
+            thrust_start = pw + R @ (half_length * np.sign(b.thrust[i] or 1.0) * axis)
+            fw = R @ (axis * b.thrust[i] / max(b.p.T_max, 1e-9) * 0.25)
+            self.artists += ax.plot([thrust_start[0], thrust_start[0] + fw[0]],
+                                    [thrust_start[1], thrust_start[1] + fw[1]],
+                                    [-thrust_start[2], -thrust_start[2] - fw[2]], color="#e34948", lw=1.5)
         # net thruster force received by the blimp, at CV, world frame; display z = -ned z
         F_body = b.wrench(b.thrust)[:3]
         F_w = R @ F_body
@@ -356,7 +533,10 @@ class Viewer:
                 tr = np.array(self.trails[i][-self.trail_n:])
                 self.artists += ax.plot(tr[:, 0], tr[:, 1], 0 * tr[:, 0], color=col, lw=0.8, alpha=0.6)
         self.hud.update(b.eta[3], b.eta[4], b.eta[5])
-        self.telemetry.set_text(self._telemetry_text(F_w))
+        if self.gui:
+            self._update_vehicle_info(F_w)
+        else:
+            self.telemetry.set_text(self._telemetry_text(F_w))
 
     def _frame(self, _):
         if not self.paused:

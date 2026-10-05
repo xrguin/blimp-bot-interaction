@@ -1,0 +1,116 @@
+{
+  "status": "passed",
+  "collection_only": true,
+  "checks": [
+    "finite arrays and declared shapes",
+    "unique episode/step keys",
+    "whole-episode splits",
+    "complete final transitions",
+    "0.05 s alignment and episode continuity",
+    "symmetric vertical-only commands and motion",
+    "neutral trim and unit consistency",
+    "no contact or boundary-guard crossings",
+    "exact actuator-lag update",
+    "all 14,400 transitions replayed sequentially, with every physics substep checked",
+    "source snapshots, file hashes, settings, units, initial states, and unique seeds",
+    "complete signed amplitude/duration coverage and recorded command schedules"
+  ],
+  "splits": {
+    "train": {
+      "episodes": 8,
+      "transitions": 9600,
+      "duration_s": 480.0,
+      "altitude_range_m": [
+        1.153990580331239,
+        2.896802004169026
+      ],
+      "vertical_velocity_range_m_s": [
+        -0.1941066735492072,
+        0.19283539084903986
+      ],
+      "command_levels": [
+        -1.0,
+        -0.8,
+        -0.6,
+        -0.4,
+        -0.2,
+        0.0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1.0
+      ],
+      "contacts": 0
+    },
+    "validation": {
+      "episodes": 2,
+      "transitions": 2400,
+      "duration_s": 120.0,
+      "altitude_range_m": [
+        1.3945247310731037,
+        2.546924869731516
+      ],
+      "vertical_velocity_range_m_s": [
+        -0.191180987698826,
+        0.18877002346969754
+      ],
+      "command_levels": [
+        -1.0,
+        -0.8,
+        -0.6,
+        -0.4,
+        -0.2,
+        0.0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1.0
+      ],
+      "contacts": 0
+    },
+    "test": {
+      "episodes": 2,
+      "transitions": 2400,
+      "duration_s": 120.0,
+      "altitude_range_m": [
+        1.2175866852135504,
+        2.7900205558033284
+      ],
+      "vertical_velocity_range_m_s": [
+        -0.192395504629476,
+        0.1926761060444424
+      ],
+      "command_levels": [
+        -1.0,
+        -0.8,
+        -0.6,
+        -0.4,
+        -0.2,
+        0.0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1.0
+      ],
+      "contacts": 0
+    }
+  },
+  "total_transitions": 14400,
+  "limits": [
+    "simulated vertical flight only",
+    "one fixed neutral-trim parameter setting",
+    "no model has been fitted or evaluated",
+    "simulator thrust states are available without sensor noise",
+    "flight coverage is not a formal excitation or hardware-fidelity guarantee"
+  ],
+  "checker_sha256": "7c06d789668fc004098cb973e1c530819205426105a114734927454b01c3553e",
+  "dataset_sha256": {
+    "train": "d4d6224b4f5a82e50613586562ed461d9eda10c9106b3da0f75d0677f63d19af",
+    "validation": "98c671c2b03c7ae6b6a97c754f8fe69ee9524fda629d272232fa1bd212ef15ad",
+    "test": "86bee230dab37f42828ff304c2528b749d71e0c960e48efa85a602e968649fd1"
+  },
+  "manifest_sha256": "8d439ce2a942ff7a6d31241403aae74a8fec748faeb28b0e34e964bad1709625"
+}
