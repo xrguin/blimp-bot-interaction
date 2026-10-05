@@ -26,6 +26,7 @@ Primary sources: `README.md` describes the implemented simulator; `docs/PLAN.md`
 - Interface: localhost browser control panel with a bundled Three.js scene, readable telemetry, numeric fields paired with every slider, an altitude target, and NPZ/PNG export. The Matplotlib viewer remains available for existing GUI and video workflows.
 - Logging: NumPy NPZ export for blimp and rover transitions. A saved example is present in `results/circle.npz`; suitability for model training has not been audited in this review.
 - Altitude lesson: a separate automatic collector records neutral-trim vertical flights with complete state/action/next-state timing and source provenance. The first checked dataset contains 14,400 transitions in `results/altitude_lesson/2026-10-04_neutral_seed42`; no learned model has been fitted yet.
+- Onboard vision: configurable OV2640-style pinhole camera under the gondola, looking down, with live preview and synchronized PNG/state/action recording. Optics and mounting position are estimates until measured. No learned perception or hardware image-fidelity result is implied.
 
 ## Key files
 
@@ -39,8 +40,12 @@ Primary sources: `README.md` describes the implemented simulator; `docs/PLAN.md`
 | `sim/keyboard.py` | Keyboard mapping and hold assistance |
 | `sim/viewer.py` | GUI and video rendering |
 | `sim/web_runtime.py` | Single-owner simulation worker, command validation, snapshots, and NPZ export |
+| `sim/camera.py` | Camera calibration validation, NED/optical pose, and exact simulation-clock recording |
 | `web_server.py` | Loopback HTTP/WebSocket server and browser launch |
 | `web/` | HTML controls, telemetry, 3D scene, and offline vendor assets |
+| `web/camera-math.js`, `web/sensor-camera.js` | Calibrated projection, inverse lens distortion, and sensor-only rendering |
+| `web/camera-panel.js`, `web/zip.js` | Camera settings, live preview, and offline PNG/JSON archive export |
+| `config/camera_ov2640.example.json` | Uncalibrated default profile; replace optics and mounting pose with measurements |
 | `requirements-web.txt` | Tested browser-server dependencies |
 | `Start Web GUI.command` | macOS launcher using the project virtual environment |
 | `run_circle.py` | Autonomous circle scenario entry point |
@@ -85,7 +90,7 @@ Install dependencies only when required for an authorized task. Keyboard default
 - `docs/PLAN.md` still says "planning only (no code)". Its five-thruster/four-input design and lagged rover dynamics differ from the implemented six-thruster simulator and ideal rovers. `docs/PROBLEM_FORMULATION.md` also retains the planned state/input definitions.
 - Translational drag, added mass, yaw parameters, thrust, and actuator lag are marked as unmeasured/tunable in `sim/params.py`; passing simulator checks does not establish hardware fidelity.
 - The documents refer to `ICARV_08581376.pdf` as local, but it is absent from this checkout and explicitly ignored by Git. Source-paper parameter verification remains outstanding for this review.
-- Hardware geometry, thrust calibration, rover platform, camera orientation, and motion-capture/communication details remain design questions in the plan.
+- Hardware geometry, thrust calibration, rover platform, and motion-capture/communication details remain design questions in the plan. The camera is now specified as OV2640 beneath the gondola, looking down; intrinsics, distortion, mounting pose and actual sensor performance still require measurement.
 
 Suggested next work, subject to the user's chosen task: reconcile the design documents with v1; confirm hardware and parameter sources; audit transition timing and log metadata before dataset collection; then implement and evaluate the first learned module.
 
@@ -286,3 +291,115 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   yaw and R producing positive yaw. Whitespace checks passed. No interactive browser
   session was restarted or visually tested; running simulators must restart to load the
   Python mapping, and browser pages should reload to show the updated key guide.
+
+## Simulated OV2640 camera and synchronized recording — 2026-10-05
+
+- User selected the OV2640 variant of Seeed XIAO ESP32-S3 Sense, mounted under the
+  gondola looking straight down, with live preview and synchronized recording. Kept
+  the existing Python/Three.js simulator and offline runtime; added no dependencies.
+- Added full-attitude optical pose, pinhole projection and OpenCV five-coefficient
+  Brown–Conrady distortion. Image top is body forward, right is body right. Ground
+  texture provides motion cues; sensor images exclude debug overlays but retain
+  physical geometry, self-occlusion and shadows.
+- Defaults are explicit assumptions: 640 × 480 at 10 simulated fps, 60-degree horizontal
+  field of view, centred principal point, zero distortion, lens 2 mm below the gondola
+  box (0.312 m body-down from CV, about 13 mm above ground at startup). These are not
+  measured lens or throughput specifications. Sensor placement does not add payload
+  mass or change the existing ground-contact geometry.
+- Import/export full camera profiles or compact OpenCV-style JSON. Intrinsics scale
+  with pixel-centre convention and fixed aspect ratio. The User optics badge covers
+  only intrinsics/distortion; the default mounting pose remains estimated. Invalid
+  backend settings restore accepted form values. Renderer failures clear stale images,
+  disable recording and wait for explicit retry or a changed profile.
+- Live preview is capped at 640 × 480 and 10 Hz; saved previews identify the actual
+  captured generation/control-step/time. Recorded output supports 320 × 240 through
+  1600 × 1200 and 5/10/20 simulated fps, independently of browser refresh. No measured
+  latency or real-time performance guarantee is made.
+- Recording retains the initial frame, scheduled exact control-tick states, the final
+  state, and every 20 Hz pre/post transition with actual blimp and clipped rover actions,
+  actuator targets and parameter metadata. Stops at 30 simulated seconds or on Stop,
+  Reset, disconnect or failure; pauses create no duplicates. A completed recording must
+  be explicitly discarded before another starts. It survives Reset but not server exit.
+- Export renders each retained pose in an independent scene into PNG files, then builds
+  a ZIP with recording.json and manifest.json, timestamps, action-interval indices,
+  intrinsics/poses, invalid-pixel fractions and SHA-256 hashes. Progress, cancel, retry
+  and a persistent Save ZIP link are provided. Large exports use more memory/time.
+- Passed 36 Python camera/web/altitude tests, five dynamics checks, nine keyboard checks,
+  five camera-math tests and nine camera-panel tests (64 total); whitespace checks pass.
+  GPT-5.6 Sol provided planning and final review; reported frontend issues were repaired.
+- Browser GPU preview was visually inspected at ground level and in flight with four
+  rovers. Tested invalid focal-length rejection/restoration and compact calibration import
+  with nonzero radial/tangential distortion, then restored estimated default optics.
+  No browser warnings/errors were observed. A 30-second test generated 301 images;
+  independently fetched JSON confirmed 301 unique scheduled states, 600 control intervals,
+  and exact image-state/pre-post alignment. The ZIP writer separately passed Python
+  archive/CRC inspection. The in-app browser download helper timed out for the actual
+  generated blob ZIP, so its OS-level save and complete image archive were not inspected.
+- Preview: results/web_gui_ov2640_camera.jpg. The isolated test server uses port 8001;
+  the older port-8000 session was not restarted. Existing sessions need a Python server
+  restart and page reload to load the camera backend. Existing experiments were preserved.
+- Limits: stylized scene; uncalibrated hardware fidelity; no sensor noise, exposure/white
+  balance, rolling shutter, motion blur, focus, OV2640 JPEG processing, microphone audio
+  or Wi-Fi delay model. Recording is not a full controller/RNG checkpoint for arbitrary
+  disturbed-flight replay. No visual world model was trained in this task.
+
+## Controls guide beneath Live World — 2026-10-05
+
+- User deferred online publication and requested control instructions beneath Live World;
+  confirmed movement keys, PID hold, release controls and pause. No deployment work was
+  performed. The public hosting/session choices remain unanswered.
+- Moved the keyboard guide from the sidebar to a dedicated card directly below the 3D
+  scene. It stays grouped with the scene when the camera panel stacks on smaller screens.
+  Added Teleop/Run/focus instructions and plain-language direction labels: W/S forward/back,
+  A/D slide left/right, Q/E up/down, F/R rotate left/right, H PID hold, Space release manual
+  input, Esc pause. Clarified heading-relative horizontal movement and continued momentum.
+- Only static HTML/CSS and documentation changed; physics, key mappings and input-focus
+  protection remain unchanged. GPT-5.6 Sol reviewed the layout plan and final source.
+- Visually verified the 1280-pixel browser layout, correct DOM ordering, one guide only,
+  no horizontal overflow and no browser warnings/errors. Existing flight remained paused
+  and was inspected as a spectator. Narrow-screen wrapping was reviewed in CSS, not tested
+  interactively. Whitespace checks passed; no new tests were needed for this static guide.
+- Preview: results/web_gui_controls_guide.jpg. Reload the browser to display the guide;
+  no Python restart is needed for this change.
+
+## Online deployment cancelled — 2026-10-05
+
+- User initially selected Render Free with independent visitor flights, then explicitly
+  cancelled publication and requested reverting to local operation.
+- No Render service was created, no public simulator URL was published, and no commit
+  or branch was pushed. Repository visibility remained private.
+- Removed the online deployment configuration and isolated visitor-session changes,
+  preserving the previously authorized local simulator, OV2640 camera/recording and
+  controls guide. Restored the original main branch and deleted the unused deployment
+  branch. All 36 original Python camera/web/altitude tests and 14 JavaScript tests pass;
+  whitespace checks and a search for remaining public-session code are clean.
+  GPT-5.6 Sol completed the final rollback review with no actionable findings.
+- Render was installed/connected during preparation; the user did not request removal
+  of that account connection, so it was left unchanged. No credentials were saved in
+  the project. Existing research results and the port-8001 user flight were preserved.
+- Stopped the disposable public-mode test server and started the normal loopback-only
+  local launcher on http://127.0.0.1:8002. Opened the browser as controller at t=0,
+  ground clearance 0 m, paused, with camera and controls guide present and no browser
+  warnings or errors. The original local startup commands remain unchanged.
+
+## Online deployment resumed — 2026-10-05
+
+- User reported granting Render access to this GitHub repository only, then explicitly
+  requested resuming full online deployment. The named Render connection now successfully
+  accesses My Workspace. Repository visibility must remain private.
+- Restoring the previously tested public-session layer with GPT-5.6 Sol planning/review.
+  The target is one native Python Render Free web service in Ohio, two visitor slots,
+  one worker and manual deployments. No database, paid service, or persistent disk is
+  needed. The normal localhost launcher and existing research files remain available.
+- Confirmed expiry will require an explicit Start new flight action, so idle browser
+  pages do not automatically reclaim capacity. Transient connections reuse their current
+  flight token. Tokens stay in page memory and never appear in request URLs.
+- Deployment configuration is documented in README; direct Render service creation is
+  used instead of a Blueprint. The active branch is codex/render-demo. Publication and
+  end-to-end verification are in progress; no successful deployment is claimed yet.
+- Restored-code checks: 49 backend tests and 25 JavaScript tests passed. A temporary
+  loopback browser preview with a shortened 25-second lifetime confirmed startup,
+  explicit expiry notice, no automatic reallocation, and Start new flight returning
+  to a fresh paused state. The stale expiry notice after restart was repaired.
+  The native browser timer wrapper regression is retained. Public host/origin rules
+  are tested separately from the loopback-only browser adapter.

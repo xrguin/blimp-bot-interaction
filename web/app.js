@@ -1,4 +1,6 @@
 import { SimulationScene } from './scene.js';
+import { CameraPanel } from './camera-panel.js';
+import { SessionTransport } from './session-transport.js';
 
 const $ = (id) => document.getElementById(id);
 const KEY_SET = new Set(['w', 's', 'a', 'd', 'q', 'e', 'r', 'f']);
@@ -6,6 +8,7 @@ const app = {
   config: null,
   state: null,
   scene: null,
+  sensorPanel: null,
   socket: null,
   hasControl: false,
   pressed: new Set(),
@@ -15,7 +18,8 @@ const app = {
   commandId: 0,
   lastUiCommand: null,
   lastSceneSeq: null,
-  reconnectTimer: null,
+  transport: null,
+  initialized: false,
 };
 
 function commandId() {
@@ -51,7 +55,7 @@ function send(action, payload = {}) {
   const id = commandId();
   if (action !== 'keys' && action !== 'stop') app.lastUiCommand = id;
   app.socket.send(JSON.stringify({ type: 'command', id, action, ...payload }));
-  return true;
+  return id;
 }
 
 function clearPressed(sendStop = true, notify = true) {
@@ -70,24 +74,14 @@ function clearPendingParameters() {
   app.lastUiCommand = null;
 }
 
-function websocketUrl() {
-  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${scheme}//${location.host}/ws`;
-}
-
-function connect() {
-  clearTimeout(app.reconnectTimer);
+function disconnected() {
   clearPressed(false, false);
   clearPendingParameters();
   setControlAvailability(false);
-  setConnection('offline', 'Connecting…');
-  const socket = new WebSocket(websocketUrl());
-  app.socket = socket;
+  app.sensorPanel?.onState(app.state || {});
+}
 
-  socket.addEventListener('open', () => setConnection('online', 'Connected'));
-  socket.addEventListener('message', (event) => {
-    let message;
-    try { message = JSON.parse(event.data); } catch { return; }
+function receiveMessage(message) {
     if (message.type === 'hello') {
       setControlAvailability(message.has_control);
       showCommandError(message.has_control ? '' : 'Another browser has control. This view is read-only.');
@@ -101,20 +95,12 @@ function connect() {
       }
       app.state = message;
       updateInterface(message);
+      app.sensorPanel?.onState(message);
       return;
     }
+    app.sensorPanel?.onMessage(message);
     if (message.type === 'error') showCommandError(message.message || 'The command was rejected.');
     if (message.type === 'ack' && message.id === app.lastUiCommand && !app.state?.error) showCommandError('');
-  });
-  socket.addEventListener('close', () => {
-    if (app.socket !== socket) return;
-    clearPressed(false, false);
-    clearPendingParameters();
-    setControlAvailability(false);
-    setConnection('offline', 'Reconnecting…');
-    app.reconnectTimer = setTimeout(connect, 900);
-  });
-  socket.addEventListener('error', () => setConnection('offline', 'Connection error'));
 }
 
 function formatNumber(value) {
@@ -248,6 +234,8 @@ function createParameterControl(parameter) {
 
 function buildParameters(parameters) {
   const container = $('parameter-groups');
+  container.replaceChildren();
+  app.paramBindings.clear();
   const groups = new Map();
   parameters.forEach((parameter) => {
     if (!groups.has(parameter.group)) groups.set(parameter.group, []);
@@ -316,6 +304,9 @@ function updateCanonicalParameters(params = {}) {
 }
 
 function updateInterface(state) {
+  $('flight-limit').textContent = state.limit_message || '';
+  $('flight-limit').hidden = !state.limit_message;
+  $('pause-toggle').disabled = !app.hasControl || Boolean(state.limit_message);
   $('sim-time').textContent = `${Number(state.t || 0).toFixed(1)} s`;
   $('run-state').textContent = state.paused ? 'Paused' : 'Running';
   $('run-state').className = `badge ${state.paused ? 'paused' : 'running'}`;
@@ -441,6 +432,23 @@ function wireControls() {
   });
   $('camera-reset').addEventListener('click', () => app.scene?.resetCamera());
   $('capture-scene').addEventListener('click', () => app.scene?.downloadPng());
+  $('download-log').addEventListener('click', async (event) => {
+    event.preventDefault();
+    if (!app.transport) return;
+    const button = $('download-log');
+    button.disabled = true;
+    try {
+      const response = await app.transport.request('/api/log.npz');
+      if (!response.ok) throw new Error((await response.json()).detail || 'Flight log unavailable.');
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `blimp-flight-${new Date().toISOString().replaceAll(':', '-')}.npz`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (error) { showCommandError(error.message); }
+    finally { button.disabled = false; }
+  });
 }
 
 function wireKeyboard() {
@@ -486,38 +494,82 @@ function renderLoop() {
     app.lastSceneSeq = app.state.seq;
   }
   app.scene?.render();
+  if (app.state) app.sensorPanel?.render(app.state);
   requestAnimationFrame(renderLoop);
 }
 
-async function initialize() {
-  wireControls();
-  wireKeyboard();
+function sessionReady(session) {
+  $('start-new-flight').hidden = true;
+  $('session-notice').hidden = true;
+  $('session-notice').textContent = '';
+  app.config = session.config;
+  app.state = null;
+  app.lastSceneSeq = null;
+  disconnected();
+  $('session-mode').textContent = session.mode === 'isolated' ? 'Online private flight' : 'Local simulation';
+  const limits = app.config.public_limits;
+  if (session.mode === 'isolated' && limits) {
+    const end = new Date(session.expires_at);
+    const endText = Number.isFinite(end.getTime()) ? ` Ends by ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` : '';
+    $('session-details').textContent = `Each tab has its own flight.${endText} Inactive flights end after ${Math.round(limits.idle_seconds / 60)} minutes; disconnected flights after ${limits.disconnected_grace_seconds} seconds. Logs stop after ${Math.round(limits.max_log_steps * app.config.dt_ctrl / 60)} simulated minutes and require Reset. Download data before leaving.`;
+  } else $('session-details').textContent = 'Runs on this computer. Other tabs share this flight. Download data before stopping the server.';
+  $('flight-limit').hidden = true;
+  buildParameters(app.config.parameters || []);
   setControlAvailability(false);
-  let response;
-  try {
-    response = await fetch('/api/config', { cache: 'no-store' });
-    if (!response.ok) throw new Error(`Configuration request failed (${response.status})`);
-    app.config = await response.json();
-  } catch (error) {
-    setConnection('offline', 'Service unavailable');
-    showCommandError(error.message);
-    $('scene-error').hidden = false;
-    $('scene-error').querySelector('span').textContent = 'Start the local service, then reload this page.';
+  if (app.initialized) {
+    app.sensorPanel?.resetSession();
+    app.scene?.rovers.forEach((rover) => rover.resetTrail());
+    app.scene?.resetCamera();
     return;
   }
-  buildParameters(app.config.parameters || []);
+  app.initialized = true;
   try {
     const scene = new SimulationScene($('scene-canvas'), () => { $('scene-error').hidden = false; });
     app.scene = scene;
     scene.initialize(app.config);
+    app.sensorPanel = new CameraPanel(scene, { send, getState: () => app.state,
+      getConfig: () => app.config, hasControl: () => app.hasControl,
+      request: (path, options) => app.transport.request(path, options) });
     window.__blimpConsole = { get state() { return app.state; }, get config() { return app.config; }, scene };
   } catch (error) {
     $('scene-error').hidden = false;
     $('scene-error').querySelector('span').textContent = 'The controls and telemetry remain available.';
     console.error('3D view initialization failed', error);
   }
-  connect();
   requestAnimationFrame(renderLoop);
+}
+
+function initialize() {
+  wireControls();
+  wireKeyboard();
+  setControlAvailability(false);
+  app.transport = new SessionTransport({ onSession: sessionReady, onStatus: setConnection,
+    onSocket: (socket) => { app.socket = socket; }, onMessage: receiveMessage, onDisconnect: disconnected,
+    onEnded: (message) => {
+      app.state = null;
+      app.lastSceneSeq = null;
+      app.sensorPanel?.resetSession();
+      $('run-state').textContent = 'Flight ended';
+      $('run-state').className = 'badge paused';
+      $('pause-toggle').textContent = 'Run';
+      $('pause-toggle').classList.remove('running');
+      $('pause-toggle').setAttribute('aria-pressed', 'false');
+      $('session-notice').textContent = message;
+      $('session-notice').hidden = false;
+      $('start-new-flight').textContent = 'Start new flight';
+      $('start-new-flight').hidden = false;
+    },
+    onCapacity: () => {
+      $('start-new-flight').textContent = 'Retry start';
+      $('start-new-flight').hidden = false;
+    } });
+  $('start-new-flight').addEventListener('click', () => {
+    $('start-new-flight').hidden = true;
+    app.transport.start();
+  });
+  window.addEventListener('pagehide', () => app.transport.stop());
+  window.addEventListener('pageshow', (event) => { if (event.persisted) app.transport.start(); });
+  app.transport.start();
 }
 
 initialize();

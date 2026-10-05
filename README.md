@@ -1,7 +1,7 @@
 # blimp-bot-interaction — team simulator v1
 
 Pure-NumPy simulator of a GT-MAB-class blimp and N differential-drive rovers, with an offline
-browser control panel and a Matplotlib viewer. Perfect knowledge, no camera, no noise, no
+browser control panel and a Matplotlib viewer. Ground-truth control, simulated onboard vision, no sensor noise, no
 latency (v1 scope). Design documents: `docs/PLAN.md`, `docs/PROBLEM_FORMULATION.md`.
 
 ## Browser GUI (recommended)
@@ -35,6 +35,9 @@ including when the blimp tilts. A desired altitude of **0 m** means ground conta
 
 - **Scene:** drag to orbit, scroll to zoom, and use Reset view to restore the camera.
   Rover trails show recent motion; arrows show heading and realized thruster force.
+- **Blimp controls:** the guide directly below Live World shows movement keys, PID hold,
+  release-input and pause shortcuts. Select Teleop, press Run, then click the 3D view
+  before holding movement keys; movement directions follow the blimp's heading.
 - **Vehicle information:** large altitude and desired-altitude fields, attitude, position,
   body velocity, manual commands, net lift, and thruster force, with units.
 - **Controls:** choose keyboard or automatic flight, circle or idle rovers, PID hold,
@@ -69,7 +72,8 @@ Browser flight keys:
 Click the scene to use flight keys. Typing in a field does not fly the blimp. Changing focus,
 hiding the tab, or losing the connection clears held keys; the server also expires stale
 key messages after 0.35 s. Closing/disconnecting the controlling tab pauses the simulation.
-Additional tabs are read-only; close the controlling tab and reload another tab to take control.
+For the local launcher, additional tabs are read-only; close the controlling tab and reload
+another tab to take control. The public demo gives each page a separate flight.
 
 The Python worker retains the existing 100 Hz physics and 20 Hz control steps independently
 of browser drawing. The browser receives state at 20 Hz and draws the scene on its own
@@ -82,6 +86,43 @@ Browser-backend checks (the extra dependency is only needed for testing):
 .venv/bin/python -m pip install -r requirements-web-dev.txt
 .venv/bin/python -m unittest sim.tests.test_altitude sim.tests.test_web
 ```
+
+## Online demo on Render Free
+
+Public hosting is explicitly enabled with `BLIMP_PUBLIC=1`; the local launcher above
+continues to work offline. Each public page gets a separate paused flight and camera
+recording. The repository remains private, and only `web/` assets and the session APIs
+are served. Existing research results are not exposed by the website.
+
+Render service settings:
+
+- Runtime: Python 3; `.python-version` selects the latest Python 3.11 patch.
+- Plan: Free; region: Ohio; automatic deployment: off.
+- Repository branch: `codex/render-demo`.
+- Build: `pip install -r requirements-web.txt`.
+- Start: `python -m uvicorn web_server:create_deployment_app --factory --host 0.0.0.0 --port $PORT --workers 1 --ws-max-size 8192`.
+- Environment: `BLIMP_PUBLIC=1`, `BLIMP_MAX_SESSIONS=2`, `OPENBLAS_NUM_THREADS=1`,
+  `OMP_NUM_THREADS=1`, and `PYTHONUNBUFFERED=1`.
+- Render supplies `RENDER_EXTERNAL_HOSTNAME`, from which the allowed HTTPS origin is
+  derived. An alternative hostname requires an explicit `PUBLIC_ORIGIN`.
+- Health endpoint: `/health`. Run exactly one worker because visitor sessions are in memory.
+
+The first deployment admits two simultaneous flights. This is a capacity limit, not
+a real-time performance guarantee. Sessions end after 30 minutes, after 10 minutes
+without activity, or after a one-minute disconnection grace period. After expiry,
+press **Start new flight**; a page reload also creates a fresh flight. Download useful
+data before closing the page. A server restart or redeployment ends all sessions.
+
+Public logs pause at 12,000 control steps (10 simulated minutes) and require Reset
+to continue. The existing NPZ format is unchanged: N logged states yield N-1 rows.
+Camera recording remains limited to 30 simulated seconds. The server retains only
+states/actions; image rendering and ZIP generation happen in the visitor's browser.
+Each server export is limited to 32 MiB. Data is not permanently saved on the server.
+
+Render Free can sleep after 15 minutes without incoming traffic and take about a minute
+to wake. CPU and monthly usage limits make this a small demonstration service. See
+[Free service limits](https://render.com/docs/free) and
+[FastAPI deployment](https://render.com/docs/deploy-fastapi).
 
 ## Matplotlib and headless runs
 
@@ -137,6 +178,108 @@ three-component lesson state.
 This dataset covers one fixed simulator configuration, pure vertical flight, and noise-free
 simulator state. It does not establish performance under changed loads, swinging, sensor
 noise, or hardware conditions. No prediction accuracy has been measured yet.
+
+## XIAO ESP32-S3 Sense / OV2640 camera
+
+The browser includes a downward-facing camera beneath the gondola, with its image top
+pointing toward the blimp's nose. It follows the blimp's position and full attitude. The
+default optical centre is 2 mm below the gondola box, 0.312 m body-down from the centre
+of volume; at ground startup it is about 13 mm above the floor. Take off to see the room.
+Camera placement is a visual sensor setting; it does not add payload mass or change ground
+contact geometry. The textured floor is an illustrative scene, not a model of your room.
+
+**Defaults are estimates, not a hardware calibration:** 640 × 480 pixels, 10 frames per
+simulated second, 60° horizontal field of view, centred principal point, and zero lens
+distortion. The user confirmed an OV2640; Seeed also ships a newer OV3660 variant. The
+[Seeed hardware guide](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/) lists
+1600 × 1200 for OV2640. Its [camera examples](https://wiki.seeedstudio.com/xiao_esp32s3_camera_usage/)
+use selectable image sizes and JPEG settings; the simulator's frame rates and optics
+are configurable choices, not measurements of the board's throughput or lens.
+
+The camera panel provides **Save preview**, **Record**, **Stop**, and **Download frames +
+data**. Start the simulation with Run if it is paused. Recording retains the initial
+frame, frames at the chosen 5/10/20 Hz simulation cadence, and the terminal state. It
+stops after 30 simulated seconds, or on Stop, Reset, disconnect, or a numerical error.
+Pauses do not produce duplicate frames. Completed recordings remain available until
+Discard or server shutdown; a new recording cannot overwrite one. A numerical failure
+retains only the valid intervals preceding the failure.
+
+Download renders every saved pose in an independent hidden scene and produces a ZIP:
+
+- `frames/000000.png`, …: lossless camera images, without telemetry, trails, force arrows,
+  the reference circle, or the debug grid. Physical geometry and shadows remain visible.
+- `recording.json`: the camera profile, geometry, camera/blimp/rover poses, simulation
+  clocks, and every 20 Hz control interval, including pre/post states, actual applied
+  actions, requested rover actions, actuator targets, and parameter snapshots.
+- `manifest.json`: image timestamps, absolute/relative control steps, indices of the
+  control intervals leading to the next image, camera intrinsics/pose, valid-pixel
+  fraction, and SHA-256 hashes of images, profile, and state/action data.
+
+Live preview uses the latest state, is capped at 640 × 480 and 10 Hz to limit the effect
+on flight controls, and may skip frames if the browser is busy. **Save preview** saves
+that displayed resolution with its actual capture time and control step in the filename.
+Recordings retain the selected full resolution and cadence (up to 1600 × 1200 at 20 Hz). The
+recording dataset is rendered from the exact retained simulation states, independently
+of display refresh. A final image can close a shorter-than-normal camera interval;
+use its timestamp rather than assuming every interval has the same length. Export
+shows progress, can be cancelled, and keeps the recording for retry. Large resolutions
+increase export time and browser memory use. This records motion accurately in time;
+it is not a full RNG/controller checkpoint for replaying arbitrary disturbed flights.
+
+### Applying your calibration
+
+Open **Camera settings & calibration**. Resolution and frame rate can be changed there,
+along with focal lengths, principal point, distortion, and lens position. **Export
+settings** saves the complete profile. [config/camera_ov2640.example.json](config/camera_ov2640.example.json)
+is the same uncalibrated starting profile. **Import calibration / settings** accepts
+that full format, or this compact JSON format from an OpenCV-style calibration:
+
+```json
+{
+  "image_width": 640,
+  "image_height": 480,
+  "camera_matrix": [[600.0, 0.0, 319.5], [0.0, 600.0, 239.5], [0.0, 0.0, 1.0]],
+  "distortion_coefficients": [-0.1, 0.01, 0.0, 0.0, 0.0]
+}
+```
+
+The numbers above only illustrate the file format. Replace them with your measured
+values. Compact calibration import marks the optics as user-calibrated and retains
+the current mounting pose. The **User optics** badge and `calibration_status` describe
+only intrinsics/distortion; the default mounting pose remains an estimate until measured.
+Full profile import preserves its `calibration_status`.
+Changing intrinsics/distortion manually marks the optics as estimated again.
+
+Conventions follow the [OpenCV pinhole model](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html):
+`K` is a 3 × 3, zero-skew intrinsic matrix at `reference_width/reference_height`; `D`
+is `[k1, k2, p1, p2, k3]`. The renderer applies Brown–Conrady distortion through inverse
+sampling, with an expanded ideal image to avoid clipping normal barrel-distorted
+corners. Unsupported/invertibility-limited pixels are black and their fraction is
+reported. Fisheye and rational 8/12/14-coefficient calibration models are not accepted.
+Output modes are 320 × 240, 640 × 480, 800 × 600, and 1600 × 1200.
+
+Pixel centres use integer coordinates starting at zero. Same-aspect output resizing
+uses `fx' = s fx`, `fy' = s fy`, `cx' = s(cx + 0.5) - 0.5`, and the corresponding `cy`
+formula. A different sensor crop, mirror/flip setting, or firmware readout mode needs
+its own calibration; changing resolution here assumes resizing the same field of view.
+
+World and body coordinates are NED, with body x forward, y right, z down, referenced
+to the centre of volume. Optical axes are x right, y down, z forward. Full profile
+`translation_body_m` locates the lens; `rotation_optical_to_body` maps optical vectors
+into body coordinates. The default rotation is `[[0,-1,0],[1,0,0],[0,0,1]]`. Exact camera
+poses use `p_NC = p_NB + R_NB r_BC` and `R_NC = R_NB R_BC`.
+
+The current model reproduces geometric projection, mounting motion, configurable lens
+distortion, resolution and simulation cadence. Exposure/auto white balance, sensor
+noise, rolling shutter, motion blur, focus, OV2640 JPEG processing, microphone audio,
+and Wi-Fi latency are not emulated. Hardware visual fidelity remains unverified.
+
+Camera checks:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest sim.tests.test_camera sim.tests.test_web
+node --test web/tests/*.test.mjs
+```
 
 ## Matplotlib keyboard teleop (adapted from EDMDc/teleop_tank.py)
 

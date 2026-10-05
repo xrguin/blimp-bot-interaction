@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import copy
 from concurrent.futures import Future
+from dataclasses import asdict
 import io
+import json
 import math
 import queue
 import threading
@@ -12,6 +14,8 @@ import time
 import numpy as np
 
 from .blimp import R_zyx
+from .camera import (CameraRecording, camera_intrinsics, camera_pose,
+                     default_camera_profile, empty_recording_status, validate_camera_profile)
 from .controllers import BlimpPD, CircleTracker
 from .keyboard import KeyboardBlimpController
 from .params import G, SLIDERS, SimParams
@@ -91,7 +95,9 @@ def validate_command(message):
         if message.get("value") not in choices:
             raise ValueError(f"Choose {' or '.join(choices)}")
         result["value"] = message["value"]
-    elif action not in ("reset", "stop"):
+    elif action == "camera_config":
+        result["value"] = validate_camera_profile(message.get("value"))
+    elif action not in ("reset", "stop", "camera_record_start", "camera_record_stop", "camera_record_clear"):
         raise ValueError("Unknown command action")
     return result
 
@@ -104,14 +110,22 @@ class SimulationRuntime:
     """
     KEY_TIMEOUT = 0.35
 
-    def __init__(self, n=4, seed=0, mode="teleop", rovers_mode="circle"):
+    def __init__(self, n=4, seed=0, mode="teleop", rovers_mode="circle", max_log_steps=None, max_export_bytes=None):
         if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 32:
             raise ValueError("Rover count must be between 1 and 32")
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32:
             raise ValueError("Seed must be an integer between 0 and 4294967295")
         if mode not in ("teleop", "auto") or rovers_mode not in ("circle", "idle"):
             raise ValueError("Invalid simulation mode")
+        if max_log_steps is not None and (type(max_log_steps) is not int or max_log_steps < 1):
+            raise ValueError("Log limit must be a positive integer")
+        if max_export_bytes is not None and (type(max_export_bytes) is not int or max_export_bytes < 1):
+            raise ValueError("Export limit must be a positive integer")
+        self.max_log_steps, self.max_export_bytes = max_log_steps, max_export_bytes
+        self.limit_message = None
         self.P = SimParams(seed=seed)
+        self.camera_profile = default_camera_profile(self.P.blimp)
+        self.camera_recording = None
         self.P.task.n_rovers = n
         self.sim = TeamSim(self.P)
         self.keyboard = KeyboardBlimpController(self.sim.blimp, key_timeout=0, hold=BlimpPD(self.P.task, dt=self.P.dt_ctrl))
@@ -136,8 +150,11 @@ class SimulationRuntime:
         rovers = CircleTracker(self.P.task, len(self.sim.rovers)) if self.rovers_mode == "circle" else IdleRovers(self.P.task, len(self.sim.rovers))
         self.sim.set_controllers(rovers, self.keyboard if self.mode == "teleop" else self.autopilot)
 
-    def _reset(self):
+    def _reset(self, recording_reason="reset"):
+        if self.camera_recording is not None:
+            self.camera_recording.finish(recording_reason)
         self._clear_keys()
+        self.limit_message = None
         self.keyboard.reset()
         self.autopilot.reset()
         self.autopilot.p_ref_override = None
@@ -186,6 +203,8 @@ class SimulationRuntime:
         elif action == "pause":
             if self.error and not command["value"]:
                 raise ValueError("Reset the simulation before resuming after an error")
+            if self.limit_message and not command["value"]:
+                raise ValueError(self.limit_message)
             self.paused = command["value"]
             self._clear_keys()
         elif action == "reset":
@@ -205,14 +224,81 @@ class SimulationRuntime:
         elif action == "stop":
             self._clear_keys()
         elif action == "disconnect":
+            if self.camera_recording is not None:
+                self.camera_recording.finish("disconnect")
             self._clear_keys()
             self.paused = True
+        elif action == "camera_config":
+            if self.camera_recording is not None and self.camera_recording.active:
+                raise ValueError("Stop camera recording before changing its profile")
+            self.camera_profile = copy.deepcopy(command["value"])
+        elif action == "camera_record_start":
+            if self.camera_recording is not None:
+                raise ValueError("Clear the previous camera recording before starting another")
+            if self.error:
+                raise ValueError("Reset the simulation before starting a camera recording")
+            if self.limit_message:
+                raise ValueError(self.limit_message)
+            self._make_state()  # Validate the starting state before retaining it.
+            config = self.config()
+            metadata = {"profile": self.camera_profile, "geometry": config["geometry"],
+                        "arena": self.P.arena, "seed": self.P.seed, "generation": self.generation,
+                        "n_rovers": len(self.sim.rovers), "dt_ctrl": self.P.dt_ctrl, "dt_phys": self.P.dt_phys,
+                        "K_pixels": camera_intrinsics(self.camera_profile),
+                        "initial_parameters": asdict(self.P),
+                        "timing": "Each transition captures pre-state, applies blimp_U and rover_U for dt_ctrl, then captures post-state. Frames are sampled at exact control boundaries; the terminal frame can close a partial camera interval.",
+                        "frames_convention": "World NED; body forward/right/down at CV; optical right/down/forward. Eta angles roll/pitch/yaw in radians; altitude is gondola-bottom clearance in metres.",
+                        "limitations": "Ideal rendering with configurable pinhole/Brown-Conrady optics; no calibrated sensor noise, exposure, rolling shutter, compression, or hardware latency. Live browser previews may skip states; recording retains every control transition."}
+            self.camera_recording = CameraRecording(metadata, self._camera_state())
+        elif action == "camera_record_stop":
+            if self.camera_recording is not None:
+                self.camera_recording.finish("user_stop")
+        elif action == "camera_record_clear":
+            if self.camera_recording is not None and self.camera_recording.active:
+                raise ValueError("Stop the camera recording before clearing it")
+            self.camera_recording = None
+
+    def _camera_state(self):
+        b = self.sim.blimp
+        return {"t": self.sim.t, "control_step": self.sim.k, "eta": b.eta.tolist(), "nu": b.nu.tolist(),
+                "thrust": b.thrust.tolist(), "net_lift": float(b.lift), "altitude": b.altitude,
+                "rover_q": [r.q.tolist() for r in self.sim.rovers],
+                "camera": camera_pose(b.eta, self.camera_profile)}
+
+    def _step(self):
+        if self.max_log_steps is not None and self.sim.k >= self.max_log_steps:
+            self._reach_log_limit()
+            return
+        recording = self.camera_recording
+        capture = recording is not None and recording.active
+        if capture:
+            pre, parameters = self._camera_state(), asdict(self.P)
+            context = {"mode": self.mode, "rovers_mode": self.rovers_mode, "gain": self.keyboard.gain,
+                       "pid_enabled": self.P.task.pid_enabled}
+        self.sim.step()
+        self._make_state()  # Invalid/partial steps must never enter a recording.
+        if capture:
+            # CircleTracker returns an unconstrained request; Rover.command
+            # saturates it before integration. Record the actual applied pair.
+            recording.append(pre, self._camera_state(), np.clip(self.sim.log["blimp_u"][-1], -1, 1),
+                             [r.u for r in self.sim.rovers], parameters, context,
+                             self.sim.log["rover_u"][-1], self.sim.blimp.thrust_cmd)
+        if self.max_log_steps is not None and self.sim.k >= self.max_log_steps:
+            self._reach_log_limit()
+
+    def _reach_log_limit(self):
+        self.paused = True
+        self._clear_keys()
+        self.limit_message = f"This flight reached its {self.max_log_steps:,}-step recording limit. Download your data, then Reset to fly again."
+        if self.camera_recording is not None:
+            self.camera_recording.finish("log_limit")
 
     def _make_state(self):
         b = self.sim.blimp
         force = R_zyx(*b.eta[3:]) @ b.wrench(b.thrust)[:3]
         state = {
             "type": "state", "seq": self.seq + 1, "generation": self.generation,
+            "control_step": self.sim.k,
             "t": self.sim.t, "paused": self.paused, "mode": self.mode, "rovers_mode": self.rovers_mode,
             "pid_enabled": self.P.task.pid_enabled, "gain": self.keyboard.gain,
             "eta": b.eta.tolist(), "nu": b.nu.tolist(), "thrust": b.thrust.tolist(),
@@ -224,6 +310,10 @@ class SimulationRuntime:
             "params": {key: float(getattr(getattr(self.P, group), name)) for key, (group, name, _, _) in PARAMETER_BOUNDS.items()},
             "realtime_factor": self.realtime_factor if not self.paused else 0.0,
             "error": self.error,
+            "limit_message": self.limit_message,
+            "camera": {"profile": copy.deepcopy(self.camera_profile), "K_pixels": camera_intrinsics(self.camera_profile),
+                       **camera_pose(b.eta, self.camera_profile)},
+            "camera_recording": self.camera_recording.status() if self.camera_recording is not None else empty_recording_status(),
         }
         # Check the actual wire values, including derived force and altitude,
         # before they can reach JSON or become a browser's latest snapshot.
@@ -261,6 +351,7 @@ class SimulationRuntime:
                          "thruster_length": self.P.blimp.thruster_length, "thruster_radius": self.P.blimp.thruster_radius,
                          "thruster_positions": positions.tolist(), "thruster_axes": axes.tolist(), "rover_length": self.P.rover.body_len},
             "arena": self.P.arena, "seed": self.P.seed, "n_rovers": len(self.sim.rovers),
+            "camera": state["camera"]["profile"], "camera_intrinsics_pixels": state["camera"]["K_pixels"],
         }
 
     def submit(self, message):
@@ -271,6 +362,21 @@ class SimulationRuntime:
 
     def export(self):
         return self._enqueue({"action": "export"})
+
+    def export_camera(self):
+        return self._enqueue({"action": "camera_export"})
+
+    def _export_camera(self):
+        if self.camera_recording is None:
+            raise ValueError("No camera recording is available")
+        if self.camera_recording.active:
+            raise ValueError("Stop camera recording before downloading it")
+        return self._bounded_export(json.dumps(self.camera_recording.data, allow_nan=False, separators=(",", ":")).encode("utf-8"))
+
+    def _bounded_export(self, data):
+        if self.max_export_bytes is not None and len(data) > self.max_export_bytes:
+            raise OverflowError("Export exceeds the server download size limit")
+        return data
 
     def _enqueue(self, command):
         future = Future()
@@ -302,7 +408,7 @@ class SimulationRuntime:
                  eta_reference="CV_NED", altitude_reference="gondola_bottom", gondola_size=self.P.blimp.gondola_size,
                  thruster_length=self.P.blimp.thruster_length, thruster_radius=self.P.blimp.thruster_radius, d_VT=self.P.blimp.d_VT,
                  dt=self.P.dt_ctrl, n_rovers=n, seed=self.P.seed)
-        return output.getvalue()
+        return self._bounded_export(output.getvalue())
 
     def start(self):
         if self._thread is not None and self._thread.is_alive():
@@ -338,6 +444,8 @@ class SimulationRuntime:
                 try:
                     if command["action"] == "export":
                         result = self._export_npz()
+                    elif command["action"] == "camera_export":
+                        result = self._export_camera()
                     else:
                         self._apply(command, time.monotonic())
                         self._publish()
@@ -351,7 +459,7 @@ class SimulationRuntime:
                 last_step = None
             elif now >= next_step:
                 try:
-                    self.sim.step()
+                    self._step()
                     interval = now - last_step if last_step is not None else self.P.dt_ctrl
                     instant_factor = self.P.dt_ctrl / max(interval, 1e-6)
                     self.realtime_factor = instant_factor if not self.realtime_factor else 0.9 * self.realtime_factor + 0.1 * instant_factor
@@ -361,7 +469,7 @@ class SimulationRuntime:
                     # A step changes clocks, rovers, RNG, actuator/disturbance
                     # states, controller memory and logs. Reset them together
                     # instead of publishing a partially rolled-back session.
-                    self._reset()
+                    self._reset(recording_reason="numerical_error")
                     self.error = "Simulation reset and paused after a numerical error; session log cleared. Press Reset to continue."
                     last_step = None
                 # Preserve the fixed step; avoid replaying an unbounded backlog.
