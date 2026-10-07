@@ -725,3 +725,23 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
 - Load scripts live in the session scratchpad only; results are for this machine.
 - Follow-up: user fixed the cap at 4; `web_server.py --max-sessions` now defaults to 4 and the
   user chose the permanent-link path (own domain, no login page).
+
+## Live deployment at blimp-bot-simulator.com and bot-resistant sessions — 2026-10-07
+
+- User registered `blimp-bot-simulator.com` (Cloudflare Registrar, annual) and chose the
+  permanent link without a login page. Executed here after the user authorised
+  `cloudflared tunnel login`: tunnel `blimp` (id 99bc59f9-…), DNS route for the apex domain,
+  `~/.cloudflared/config.yml`, systemd user units `blimp-web` (mujoco env Python,
+  `--rovers-backend mujoco --max-sessions 4 --idle-timeout 180 --public-host
+  blimp-bot-simulator.com`) and `cloudflared`, `loginctl enable-linger`. Four tunnel
+  connections registered; `/health` OK locally; requests arrived through the tunnel.
+- From this network the domain is blocked by the institution's web filter ("Web Page Blocked",
+  HTTP 503 page, TLS resets) while cloudflare.com works, so end-to-end verification from here was
+  not possible; the user should verify from mobile data.
+- Within minutes a scanner probed `/.env`, `/config.json`, `/AGENTS.md` (all 404) and a cloud
+  client ran the page, creating sessions until the cap was hit (409 to a later visitor). Fixed:
+  `/api/config` now only reserves a session; the simulation starts on the page's WebSocket
+  connection (`SessionManager.ensure_started`, cap on running sessions, close code 4409 handled
+  by the page with a 20 s retry); unconnected reservations expire after 60 s, reservations are
+  bounded at 8× the cap, default idle timeout is 180 s, `/health` reports running and reserved.
+  65 tests pass; services restarted with the new code.

@@ -17,15 +17,16 @@ class SessionLimitError(RuntimeError):
 
 
 class Session:
-    __slots__ = ("id", "runtime", "options", "created", "last_seen", "connections")
+    __slots__ = ("id", "runtime", "options", "created", "last_seen", "connections", "started")
 
-    def __init__(self, session_id, runtime, options, now):
+    def __init__(self, session_id, runtime, options, now, started=False):
         self.id = session_id
         self.runtime = runtime
         self.options = dict(options)
         self.created = now
         self.last_seen = now
         self.connections = 0            # open WebSockets; a session with connections is never reaped
+        self.started = started          # simulation thread running; only started sessions count toward the cap
 
 
 def parse_session_options(query, max_rovers=8):
@@ -62,22 +63,30 @@ class SessionManager:
     COOKIE = "blimp_session"
     REAP_INTERVAL = 15.0
 
-    def __init__(self, factory=None, *, shared_runtime=None, max_sessions=8, idle_timeout=600.0, clock=time.monotonic):
+    def __init__(self, factory=None, *, shared_runtime=None, max_sessions=4, idle_timeout=180.0, unconnected_timeout=60.0,
+                 clock=time.monotonic):
         """`factory(**options)` builds a (not yet started) SimulationRuntime for a new visitor.
-        With `shared_runtime`, every visitor is attached to that one runtime instead."""
+
+        A page load only *reserves* a session (cookie, runtime object, no thread); the simulation
+        starts when the page's WebSocket connects (`ensure_started`). Crawlers and scanners that
+        fetch /api/config therefore cost memory for `unconnected_timeout` seconds, never a slot.
+        With `shared_runtime`, every visitor is attached to that one runtime instead.
+        """
         if (factory is None) == (shared_runtime is None):
             raise ValueError("give either a runtime factory or a shared runtime")
         self.factory = factory
         self.shared = shared_runtime is not None
         self.max_sessions = 1 if self.shared else int(max_sessions)
+        self.max_reserved = 8 * self.max_sessions           # bound on reserved-but-idle sessions (memory)
         self.idle_timeout = float(idle_timeout)
+        self.unconnected_timeout = float(unconnected_timeout)
         self.clock = clock
         self._sessions = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._reaper = None
         if self.shared:
-            self._shared = Session("shared", shared_runtime, {}, self.clock())
+            self._shared = Session("shared", shared_runtime, {}, self.clock(), started=True)
             self._sessions[self._shared.id] = self._shared
 
     # ------------------------------------------------------------ lookup / creation
@@ -90,18 +99,34 @@ class SessionManager:
             return session
 
     def create(self, options=None):
+        """Reserve a session for a new visitor (runtime built, thread not started)."""
         if self.shared:
             return self.get(None)
         options = dict(options or {})
         with self._lock:
             self._reap_locked(self.clock())
-            if len(self._sessions) >= self.max_sessions:
-                raise SessionLimitError(f"The server is full ({self.max_sessions} simulations running). Try again in a few minutes.")
+            if len(self._sessions) >= self.max_reserved:
+                raise SessionLimitError("The server is busy. Try again in a minute.")
             runtime = self.factory(**options)
             session = Session(secrets.token_urlsafe(24), runtime, options, self.clock())
             self._sessions[session.id] = session
-        runtime.start()
         return session
+
+    def running(self):
+        with self._lock:
+            return sum(1 for s in self._sessions.values() if s.started)
+
+    def ensure_started(self, session):
+        """Start the session's simulation on first real use; enforces the running-session cap."""
+        with self._lock:
+            if session.started:
+                return
+            self._reap_locked(self.clock())
+            if sum(1 for s in self._sessions.values() if s.started) >= self.max_sessions:
+                raise SessionLimitError(f"The server is full ({self.max_sessions} simulations running). Try again in a few minutes.")
+            session.started = True
+            session.last_seen = self.clock()
+        session.runtime.start()
 
     def get_or_create(self, session_id, options=None):
         session = self.get(session_id)
@@ -122,15 +147,16 @@ class SessionManager:
             return len(self._sessions)
 
     def describe(self, session):
-        return {"id": session.id[:8], "shared": self.shared, "count": self.count(), "max": self.max_sessions,
-                "idle_timeout": self.idle_timeout, "options": session.options}
+        return {"id": session.id[:8], "shared": self.shared, "count": self.running(), "max": self.max_sessions,
+                "idle_timeout": self.idle_timeout, "started": session.started, "options": session.options}
 
     # ------------------------------------------------------------ lifecycle
     def _reap_locked(self, now):
         """Stop and drop sessions with no open connection for longer than idle_timeout (shared mode never reaps)."""
         if self.shared:
             return []
-        expired = [s for s in self._sessions.values() if s.connections == 0 and now - s.last_seen > self.idle_timeout]
+        expired = [s for s in self._sessions.values()
+                   if s.connections == 0 and now - s.last_seen > (self.idle_timeout if s.started else self.unconnected_timeout)]
         for s in expired:
             del self._sessions[s.id]
         return expired
@@ -139,7 +165,8 @@ class SessionManager:
         with self._lock:
             expired = self._reap_locked(self.clock())
         for s in expired:
-            s.runtime.stop()
+            if s.started:
+                s.runtime.stop()
         return [s.id for s in expired]
 
     def _reaper_loop(self):
@@ -167,4 +194,5 @@ class SessionManager:
             if not self.shared:
                 self._sessions.clear()
         for s in sessions:
-            s.runtime.stop()
+            if s.started:
+                s.runtime.stop()

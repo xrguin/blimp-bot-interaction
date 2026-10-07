@@ -9,14 +9,18 @@ Prerequisite: the server itself installed and verified per [INSTALL.md](INSTALL.
 ## How the server behaves in public mode
 
 - **Private session per visitor.** The first `/api/config` request sets an HttpOnly cookie and
-  starts a `SimulationRuntime` (own worker thread, seed, rovers, cameras) for that visitor;
-  further tabs of the same visitor join it (first tab controls, the others spectate). Visitors can
+  *reserves* a `SimulationRuntime` (own seed, rovers, cameras) for that visitor; the simulation
+  thread starts when the page's WebSocket connects. Crawlers, scanners and link-preview bots that
+  only fetch pages therefore never occupy a slot (reservations they leave behind expire after
+  60 s). Further tabs of the same visitor join the session (first tab controls, the others
+  spectate). Visitors can
   choose their setup on first load: `https://blimp.example.org/?n=6&mode=auto&seed=3`
   (`n` ≤ `--max-rovers`, `mode` teleop|auto, `rovers` circle|idle).
-- **Limits.** `--max-sessions` (default 4) concurrent simulations; beyond
-  that the page says "server full" and retries every 20 s. Sessions with no open connection for
-  `--idle-timeout` seconds (default 600) are stopped and removed; the page then starts a fresh
-  one on reconnect. Each viewer polls about 0.5 MB/s of camera JPEG, so three viewers need
+- **Limits.** `--max-sessions` (default 4) concurrent *running* simulations; a fifth visitor's
+  page loads but says "server full" and retries every 20 s until a slot frees. Simulations with
+  no open connection for `--idle-timeout` seconds (default 180) are stopped and removed; the
+  page then starts a fresh one on reconnect. `/health` reports `sessions` (running) and
+  `reserved` (page loads that have not connected yet). Each viewer polls about 0.5 MB/s of camera JPEG, so three viewers need
   roughly 12 Mbit/s of **upload** bandwidth from the host.
 - **Measured capacity (i7-13700F, RTX 3060 Ti, 62 GB), real clients.** N browsers-worth of
   clients (WebSocket state stream + camera polling at browser rates) against one server
@@ -183,7 +187,9 @@ $ systemctl --user status blimp-web cloudflared      # both: active (running)
 | Page says "This server needs an access token" | Path A token missing/wrong | open the full link with `?token=` once |
 | Site opens with **no** login page | the Access application domain does not match | B11.3: subdomain and domain must equal the hostname from B6 |
 | Login e-mail does not arrive | spam folder, or address not on the policy | check spam; B11.4 |
-| "Server full. Retrying…" | more visitors than `--max-sessions` | wait, or raise the cap in the unit file |
+| "Server full. Retrying…" | more running simulations than `--max-sessions` | wait (slots free 3 min after a visitor leaves), or add a second server process (§2b) |
+| Site works on your phone but your office/campus network shows "Web Page Blocked" | your institution's web filter blocks newly registered domains until categorised | use mobile data, or ask IT to allow the domain; it usually clears within days |
+| Strange paths in the log (`/.env`, `/config.json`, …) with 404 | internet scanners probing every new domain | normal; nothing outside `/static` and the API is served |
 
 ## 1. Run the server in public mode (test locally first)
 

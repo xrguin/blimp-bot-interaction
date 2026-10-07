@@ -36,7 +36,7 @@ from sim.web_sessions import SessionLimitError, SessionManager, parse_session_op
 WEB_ROOT = Path(__file__).resolve().parent / "web"
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 TOKEN_COOKIE = "blimp_token"
-WS_NO_SESSION, WS_UNAUTHORIZED = 4404, 4401       # application close codes the page reacts to
+WS_NO_SESSION, WS_UNAUTHORIZED, WS_FULL = 4404, 4401, 4409   # application close codes the page reacts to
 
 
 def cameras_enabled(rover_backend: str, flag) -> bool:
@@ -67,7 +67,7 @@ def is_public_request(request_or_ws, public_hosts) -> bool:
     return host in public_hosts
 
 
-def create_app(runtime=None, *, factory=None, public_hosts=(), access_token=None, max_sessions=8, idle_timeout=600.0, max_rovers=8):
+def create_app(runtime=None, *, factory=None, public_hosts=(), access_token=None, max_sessions=4, idle_timeout=180.0, max_rovers=8):
     """Build the FastAPI app.
 
     `runtime`: one shared SimulationRuntime for every visitor (original behaviour, used by tests).
@@ -110,7 +110,7 @@ def create_app(runtime=None, *, factory=None, public_hosts=(), access_token=None
     # ------------------------------------------------------------ routes
     @app.get("/health")
     async def health():
-        return {"status": "ok", "sessions": sessions.count(), "max_sessions": sessions.max_sessions}
+        return {"status": "ok", "sessions": sessions.running(), "reserved": sessions.count(), "max_sessions": sessions.max_sessions}
 
     @app.get("/")
     async def index(request: Request):
@@ -187,6 +187,11 @@ def create_app(runtime=None, *, factory=None, public_hosts=(), access_token=None
         session = current_session(ws)
         if session is None:
             await ws.close(code=WS_NO_SESSION)
+            return
+        try:
+            await asyncio.to_thread(sessions.ensure_started, session)     # the page is real: start its simulation
+        except SessionLimitError:
+            await ws.close(code=WS_FULL)
             return
         runtime = session.runtime
         await ws.accept()
@@ -274,7 +279,7 @@ def main():
     parser.add_argument("--shared", action="store_true", help="one simulation shared by all visitors instead of a private one per visitor")
     parser.add_argument("--max-sessions", type=int, default=4, help="cap on concurrent private simulations (4 keeps every session at real time on one process; see DEPLOY.md)")
     parser.add_argument("--max-rovers", type=int, default=8, help="largest rover count a visitor may request with ?n=")
-    parser.add_argument("--idle-timeout", type=float, default=600.0, help="seconds without an open connection before a private simulation is stopped")
+    parser.add_argument("--idle-timeout", type=float, default=180.0, help="seconds without an open connection before a private simulation is stopped")
     parser.add_argument("--public-host", action="append", default=[], metavar="HOST",
                         help="public hostname the server is reached through (tunnel/proxy); repeatable. Enables https origins and secure cookies for it")
     parser.add_argument("--access-token", default=None, help="shared secret visitors must present once as /?token=... (stored in a cookie)")

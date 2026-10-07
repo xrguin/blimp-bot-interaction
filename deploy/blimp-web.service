@@ -11,7 +11,7 @@ After=network.target
 WorkingDirectory=%h/Documents/blimp-bot-interaction
 Environment=MUJOCO_GL=egl
 ExecStart=%h/Documents/blimp-bot-interaction/.venv/bin/python web_server.py --no-browser --port 8000 \
-    --rovers-backend mujoco --max-sessions 4 --idle-timeout 600 --public-host blimp.example.org
+    --rovers-backend mujoco --max-sessions 4 --idle-timeout 180 --public-host blimp.example.org
 Restart=on-failure
 RestartSec=5
 

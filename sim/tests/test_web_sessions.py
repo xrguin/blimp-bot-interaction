@@ -9,7 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 from sim.params import SimParams
 from sim.web_runtime import SimulationRuntime
 from sim.web_sessions import SessionLimitError, SessionManager, parse_session_options
-from web_server import WS_NO_SESSION, WS_UNAUTHORIZED, allowed_origin, create_app
+from web_server import WS_FULL, WS_NO_SESSION, WS_UNAUTHORIZED, allowed_origin, create_app
 
 
 class FakeRuntime:
@@ -31,37 +31,55 @@ class SessionManagerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 parse_session_options(bad, max_rovers=8)
 
-    def test_create_cap_reap_and_shared(self):
+    def test_reserve_start_cap_reap_and_shared(self):
         clock = [100.0]
-        manager = SessionManager(factory=FakeRuntime, max_sessions=2, idle_timeout=60.0, clock=lambda: clock[0])
+        manager = SessionManager(factory=FakeRuntime, max_sessions=2, idle_timeout=60.0, unconnected_timeout=20.0, clock=lambda: clock[0])
         a = manager.create({"n": 2})
         b = manager.create({})
+        c = manager.create({})
+        self.assertFalse(a.runtime.started or b.runtime.started or c.runtime.started)   # page loads only reserve
+        self.assertEqual((manager.count(), manager.running()), (3, 0))
+        manager.ensure_started(a)
+        manager.ensure_started(b)
+        manager.ensure_started(a)                                # idempotent
         self.assertTrue(a.runtime.started and b.runtime.started)
-        self.assertEqual(a.runtime.options, {"n": 2})
+        with self.assertRaises(SessionLimitError):               # the cap applies to running simulations
+            manager.ensure_started(c)
+        self.assertFalse(c.runtime.started)
+        self.assertEqual(manager.running(), 2)
         self.assertIsNot(manager.get(a.id), manager.get(b.id))
         self.assertIsNone(manager.get("nope"))
-        with self.assertRaises(SessionLimitError):
-            manager.create({})
-        manager.connect(a)                                   # a has an open connection, b is idle
-        clock[0] += 61.0
-        self.assertEqual(manager.reap(), [b.id])
+        manager.connect(a)                                       # a has an open connection, b is idle, c never connected
+        clock[0] += 21.0
+        self.assertEqual(manager.reap(), [c.id])                 # unconnected reservation expires first
+        self.assertFalse(c.runtime.stopped)                      # never started, nothing to stop
+        clock[0] += 40.0
+        self.assertEqual(manager.reap(), [b.id])                 # idle started session expires after idle_timeout
         self.assertTrue(b.runtime.stopped and not a.runtime.stopped)
-        self.assertEqual(manager.count(), 1)
         manager.disconnect(a)
-        clock[0] += 30.0                                     # touched at disconnect: not idle yet
+        clock[0] += 30.0                                         # touched at disconnect: not idle yet
         self.assertEqual(manager.reap(), [])
-        c = manager.create({})                               # room again after the reap
-        session, created = manager.get_or_create(c.id, {})
-        self.assertIs(session, c)
+        d = manager.create({})
+        manager.ensure_started(d)                                # room again after the reap
+        session, created = manager.get_or_create(d.id, {})
+        self.assertIs(session, d)
         self.assertFalse(created)
-        info = manager.describe(c)
-        self.assertEqual((info["shared"], info["count"], info["max"], len(info["id"])), (False, 2, 2, 8))
+        info = manager.describe(d)
+        self.assertEqual((info["shared"], info["count"], info["max"], info["started"], len(info["id"])), (False, 2, 2, True, 8))
+        for _ in range(manager.max_reserved):                    # reservations are bounded too
+            try:
+                manager.create({})
+            except SessionLimitError:
+                break
+        else:
+            self.fail("reservation bound not enforced")
         manager.stop()
-        self.assertTrue(a.runtime.stopped and c.runtime.stopped)
+        self.assertTrue(a.runtime.stopped and d.runtime.stopped)
         shared = SessionManager(shared_runtime=FakeRuntime())
         self.assertIs(shared.get(None), shared.get("anything"))
         self.assertIs(shared.create({}), shared.get(None))
-        self.assertEqual(shared.reap(), [])
+        shared.ensure_started(shared.get(None))
+        self.assertEqual((shared.reap(), shared.running()), ([], 1))
         shared.start()
         self.assertTrue(shared.get(None).runtime.started)
         with self.assertRaises(ValueError):
@@ -101,16 +119,14 @@ class PerVisitorAppTests(unittest.TestCase):
             self.assertEqual((config["n_rovers"], config["seed"], config["session"]["shared"]), (2, 7, False))
             self.assertIn(SessionManager.COOKIE, alice.cookies)
             self.assertEqual(alice.get("/api/config").json()["session"]["id"], config["session"]["id"])   # resumed, not recreated
-            self.assertEqual(alice.get("/health").json()["sessions"], 1)
+            self.assertEqual(alice.get("/health").json(), {"status": "ok", "sessions": 0, "reserved": 1, "max_sessions": 2})
             other = bob.get("/api/config").json()
             self.assertNotEqual(other["session"]["id"], config["session"]["id"])
             self.assertEqual(other["n_rovers"], 1)
-            self.assertEqual(bob.get("/health").json()["sessions"], 2)
+            self.assertFalse(other["session"]["started"])                              # reserved only, no thread yet
             self.assertEqual(alice.get("/api/config?n=9").status_code, 400)           # above --max-rovers
             carol = TestClient(app, base_url="http://127.0.0.1")
-            full = carol.get("/api/config")
-            self.assertEqual(full.status_code, 409)
-            self.assertIn("full", full.json()["error"])
+            self.assertEqual(carol.get("/api/config").status_code, 200)               # a page load never blocks on the cap
             # Each visitor controls their own simulation; a second tab of the same visitor spectates.
             with alice.websocket_connect("ws://127.0.0.1/ws") as ws1, alice.websocket_connect("ws://127.0.0.1/ws") as ws2, \
                     bob.websocket_connect("ws://127.0.0.1/ws") as ws3:
@@ -131,6 +147,11 @@ class PerVisitorAppTests(unittest.TestCase):
                         break
                 self.assertEqual(bob_state["t"], 0.0)                                   # Bob's world is untouched
                 ws1.send_json({"type": "command", "id": "stop", "action": "pause", "value": True})
+                self.assertEqual(alice.get("/health").json()["sessions"], 2)         # alice + bob running
+                with self.assertRaises(WebSocketDisconnect) as ctx:                   # carol would be the third simulation
+                    with carol.websocket_connect("ws://127.0.0.1/ws"):
+                        pass
+                self.assertEqual(ctx.exception.code, WS_FULL)
             self.assertEqual(alice.get("/api/log.npz").status_code, 200)
             self.assertEqual(bob.get("/api/camera/blimp").status_code, 404)           # ideal backend: no cameras
 

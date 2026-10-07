@@ -117,6 +117,12 @@ function connect() {
       showCommandError('This server needs an access token. Open the link you were given (it contains ?token=…).');
       return;
     }
+    if (event.code === 4409) {                                   // all simulation slots are taken right now
+      setConnection('offline', 'Server full');
+      showCommandError('The server is full (all simulation slots are in use). Retrying automatically…');
+      app.reconnectTimer = setTimeout(connect, 20000);
+      return;
+    }
     if (event.code === 4404) {                                   // the private simulation expired: start a new one
       setConnection('offline', 'Session expired, starting a new one…');
       app.reconnectTimer = setTimeout(() => { loadConfig().then((ok) => { if (ok) connect(); }); }, 900);
