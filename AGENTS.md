@@ -425,3 +425,122 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   empty. The displayed flight was reset to paused t=0, height=0, target=0 for handoff.
   This brief check is not a concurrency or latency guarantee for the Free plan.
   Final screenshot: results/web_gui_render_live.jpg (local artifact, not served).
+
+## Modular world-model explanation — 2026-10-05
+
+- User selected this project's blimp-and-rover example, with animation and intuition
+  followed by key equations. Created an inline teaching visualization outside the
+  repository; simulator code, datasets, and trained-model status are unchanged.
+- Three views show separate module fitting, reuse of one rover model for 2/4/8
+  separate rover states, and candidate-future evaluation followed by one applied step.
+  The blimp fitting view explicitly groups separately fitted internal submodules.
+- The planning illustration uses hand-coded constant-speed rover and planar
+  constant-acceleration blimp motion. Its three candidates are scored over 4 s;
+  only the selected candidate's first 0.5 s is applied. It is not an experiment,
+  trained predictor, full project MPC implementation, or evidence of team-size transfer.
+- Explanation follows the proposed formulation's separate training objectives and
+  typed interfaces. Shared rover weights do not replace individual states, actions,
+  or inferred contexts. Formation coordination is imposed by planning objectives
+  and constraints; physically coupled tasks would require additional dynamics modules.
+- GPT-5.6 Sol supplied the plan and final source/concept review. JavaScript syntax
+  passed; browser checks covered stage changes, 2/4/8 rover selections, animation
+  completion, saved selection restoration, and readable 736/320-pixel layouts.
+  The preview reported no browser warnings/errors. No model was trained or evaluated.
+
+## Proposed abstraction, PDDL, and MZ research direction — 2026-10-05
+
+- User requested a concrete blimp–rover formulation starting from Kaelbling and
+  Lozano-Perez's hierarchical task-and-motion planning, combining compositional
+  abstraction/PDDL with Mori–Zwanzig (MZ) insights and conditional guarantees.
+- Reviewed the HPN paper, PDDLStream, MZ memory-approximation literature, the local
+  formulation, and current rover/blimp dynamics. GPT-5.6 Sol planned and reviewed
+  the proposed theoretical scope. This was a formulation discussion, not a novelty
+  survey, implemented planner, proved project theorem, or new experiment.
+- Proposed first setting: centralized, synchronized symbolic team macro-actions;
+  vehicles may move simultaneously within a macro-action. A candidate mission is
+  virtual-gate traversal followed by formation, subject to pairwise separation and
+  individual rover camera-visibility constraints. These tasks/constraints are proposed.
+- Preserve shared per-type motion models and independent module fitting. Current
+  rovers are ideal Markov unicycles; MZ memory should first be studied in reduced
+  blimp observables that omit actuator or swing state. Visibility/separation couple
+  planning; they do not create physical inter-rover forces in the current simulator.
+- Proposed contribution: select retained state/history using task-predicate margins.
+  A continuous refiner would return a trajectory and error tube tied to the current
+  history, enabling a symbolic action only when its initiation, invariant, terminal,
+  and frame-condition requirements are certified. PDDLStream is a candidate bridge.
+- Candidate theorem scope: a uniform executed-transition residual bound, Lipschitz
+  rollout propagation, and robust continuous predicate margins can certify a finite
+  accepted action sequence when terminal history tubes fit subsequent initiation
+  sets. Include intersample motion, controller state, synchronization, and bounded
+  termination. Online replanning safety alone does not prove eventual completion.
+- MZ identities do not establish memory decay, learned residual bounds, or symbolic
+  soundness automatically. The unresolved/orthogonal term must be bounded; finite
+  history need not define a unique true transition. Team-size-uniform claims also
+  require uniform module, policy, interface, and predicate bounds in an appropriate
+  norm. Hardware, arbitrary team sizes, completeness, and global stability are outside
+  this proposed first guarantee.
+- Proposed validation: matched reduced states with different histories; reduced-state
+  Markov, explicit-state, MZ, and equal-capacity history baselines; train on small teams
+  and test feasible larger teams; report predicate violations, accepted-action failures,
+  conservatism, task completion, and planning cost. No experiments or simulator changes
+  were performed. Existing research documents remain unchanged pending refinement.
+
+## Guided learning format and hidden-state lesson — 2026-10-05
+
+- User selected short lessons following Predict → Watch → Explain → Equation,
+  and correctly identified that hidden motion/actuator state can change a blimp's
+  next motion despite matching visible position and attitude.
+- Created a separate inline teaching animation with initial height and velocity
+  matched exactly, neutral buoyancy and zero commanded thrust in both cases,
+  but different realized initial thrust. An analytic vertical toy model isolates
+  actuator lag; its constants are illustrative, not project calibration or results.
+- Lesson distinguishes an adequate state containing realized thrust from a reduced
+  state that omits it. History may help infer omitted state; this example alone
+  establishes neither exact recovery from finite history nor an MZ theorem.
+- GPT-5.6 Sol planned and checked the lesson and analytic solution. JavaScript syntax,
+  browser playback completion, keyboard time scrubbing, and 736/320-pixel layouts
+  were checked; no browser warnings/errors were observed. Simulator code and data
+  are unchanged. Subsequent lessons on history, shared modules, symbolic planning,
+  and conditional guarantees remain instructional proposals.
+
+## Macro-action journal club and MZ research lesson — 2026-10-06
+
+- User selected intuition before equations and a focus on how MZ memory could
+  improve skill-level predictions. Reviewed the primary JAIR paper, Modeling and
+  Planning with Macro-Actions in Decentralized POMDPs, and primary MZ references.
+- The paper supplies asynchronous options and jointly planned local policies,
+  with decentralized execution. Its exact search is optimal only within the
+  supplied deterministic macro-policy class; approximate searches, learned models,
+  memory closures, and transfer across team sizes have no such automatic guarantee.
+- Created a separate inline teaching timeline for one blimp and two rovers.
+  An analytic lateral actuator/drag example has identical initial position and
+  velocity but initial realized thrust of 0 or 40 mN. With zero new command,
+  a speed-threshold/dwell rule finishes at 0.50 or 5.234 seconds. The chosen
+  reduced baseline assumes zero hidden thrust and predicts 0.50 seconds in both.
+  Ready/clear signals and rover travel times are illustrative assumptions.
+- This demonstrates omitted-state effects on skill timing. The zero-command
+  example has a decaying unresolved initial-state contribution; it is not an
+  identified MZ kernel, fitted world model, or project performance result.
+- Proposed research: learn history-conditioned skill outcomes and joint next-event
+  times/identities, retaining active skills and controller/elapsed-time state.
+  Compare reduced Markov, explicit-state, finite-memory, and recurrent baselines.
+  Conditional event-time bounds require reliable rollout-error bounds and robust
+  termination crossings; MZ alone does not establish these assumptions.
+- GPT-5.6 Sol provided the paper, research-scope, and final analytic/source reviews.
+  JavaScript syntax passed. Browser checks verified both conditions, full playback,
+  keyboard scrubbing, individual skill transitions, and readable 736/320-pixel
+  layouts without horizontal overflow; no warnings/errors were observed.
+- Simulator code, datasets, and adopted planner architecture remain unchanged.
+  Asynchronous decentralized planning is a research alternative to the earlier
+  proposed synchronized formulation, not an implemented replacement.
+
+## GitHub synchronization — 2026-10-07
+
+- User requested a GitHub push. Refreshed origin and confirmed all simulator code was
+  already synchronized on codex/render-demo at 309c335 before this update.
+- Included the pending research/teaching progress notes and the three referenced GUI
+  previews: controls guide, OV2640 camera, and live Render deployment.
+- GPT-5.6 Sol reviewed the commit scope and screenshots with no actionable findings;
+  whitespace checks passed. No simulator code changed, so code tests were not rerun.
+- Push destination remains the existing private repository's codex/render-demo branch.
+  This update does not merge main or request another Render deployment.
