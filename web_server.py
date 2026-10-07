@@ -272,7 +272,7 @@ def main():
     parser.add_argument("--camera-size", default="640x480", metavar="WxH",
                         help="camera resolution for every session (default 640x480; 320x240 quarters render, encode and bandwidth cost)")
     parser.add_argument("--shared", action="store_true", help="one simulation shared by all visitors instead of a private one per visitor")
-    parser.add_argument("--max-sessions", type=int, default=8, help="cap on concurrent private simulations")
+    parser.add_argument("--max-sessions", type=int, default=4, help="cap on concurrent private simulations (4 keeps every session at real time on one process; see DEPLOY.md)")
     parser.add_argument("--max-rovers", type=int, default=8, help="largest rover count a visitor may request with ?n=")
     parser.add_argument("--idle-timeout", type=float, default=600.0, help="seconds without an open connection before a private simulation is stopped")
     parser.add_argument("--public-host", action="append", default=[], metavar="HOST",

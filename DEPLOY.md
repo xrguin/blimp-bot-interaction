@@ -13,7 +13,7 @@ Prerequisite: the server itself installed and verified per [INSTALL.md](INSTALL.
   further tabs of the same visitor join it (first tab controls, the others spectate). Visitors can
   choose their setup on first load: `https://blimp.example.org/?n=6&mode=auto&seed=3`
   (`n` ≤ `--max-rovers`, `mode` teleop|auto, `rovers` circle|idle).
-- **Limits.** `--max-sessions` (default 8; the unit file uses 4) concurrent simulations; beyond
+- **Limits.** `--max-sessions` (default 4) concurrent simulations; beyond
   that the page says "server full" and retries every 20 s. Sessions with no open connection for
   `--idle-timeout` seconds (default 600) are stopped and removed; the page then starts a fresh
   one on reconnect. Each viewer polls about 0.5 MB/s of camera JPEG, so three viewers need

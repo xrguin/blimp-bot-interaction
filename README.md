@@ -103,7 +103,7 @@ circle centre and holds 1 m altitude.
 Setting up a new Ubuntu machine from scratch (system packages, virtual environment, pinned
 requirements, verification, headless rendering): see **[INSTALL.md](INSTALL.md)**. Publishing the
 server as a website (Cloudflare Tunnel + login, a private simulation per visitor, `--public-host`,
-`--access-token`, `--max-sessions`, `--shared`): see **[DEPLOY.md](DEPLOY.md)**.
+`--access-token`, `--max-sessions` (default 4 per process), `--shared`): see **[DEPLOY.md](DEPLOY.md)**.
 
 By default the rovers are exact unicycles and nothing is rendered in Python. With the optional
 `mujoco` package (`pip install -r requirements-mujoco.txt`, tested with MuJoCo 3.15.0), the

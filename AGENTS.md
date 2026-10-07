@@ -723,3 +723,5 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   process (3 comfortable); more users via several processes behind a cookie-sticky proxy
   (Caddy recipe in DEPLOY.md 2b, documented but not run — no proxy installed here).
 - Load scripts live in the session scratchpad only; results are for this machine.
+- Follow-up: user fixed the cap at 4; `web_server.py --max-sessions` now defaults to 4 and the
+  user chose the permanent-link path (own domain, no login page).
