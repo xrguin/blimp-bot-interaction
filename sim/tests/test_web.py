@@ -14,7 +14,7 @@ from sim.keyboard import KeyboardBlimpController
 from sim.params import G, SimParams, SLIDERS
 from sim.sim import TeamSim
 from sim.web_runtime import SimulationRuntime, validate_command
-from web_server import create_app
+from web_server import cameras_enabled, create_app
 
 
 def command(action, **values):
@@ -35,6 +35,12 @@ def receive_kind(ws, kind):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_camera_default_follows_rover_backend(self):
+        self.assertFalse(cameras_enabled("ideal", None))
+        self.assertTrue(cameras_enabled("mujoco", None))
+        self.assertFalse(cameras_enabled("mujoco", False))
+        self.assertTrue(cameras_enabled("ideal", True))
+
     def test_parameter_metadata_and_bounds(self):
         runtime = SimulationRuntime()
         metadata = runtime.config()["parameters"]

@@ -253,7 +253,7 @@ function buildParameters(parameters) {
     if (!groups.has(parameter.group)) groups.set(parameter.group, []);
     groups.get(parameter.group).push(parameter);
   });
-  const groupLabels = { blimp: 'Blimp physics', task: 'Controller and task', view: 'View' };
+  const groupLabels = { blimp: 'Blimp physics', task: 'Controller and task', view: 'View', mujoco: 'Cameras (MuJoCo)' };
   groups.forEach((items, groupName) => {
     const section = document.createElement('section');
     section.className = 'parameter-group';
@@ -480,6 +480,169 @@ function wireKeyboard() {
   }, 100);
 }
 
+const cameraFeed = { names: [], index: 0, etag: null, objectUrl: null, busy: false, timer: null, failures: 0,
+  thumbs: new Map(), thumbCursor: 0, thumbBusy: false, drag: null };
+
+function cameraLabel(name) {
+  if (name === 'blimp') return 'Blimp · downward camera';
+  const match = /^rover(\d+)$/.exec(name);
+  return match ? `Rover ${match[1]} · forward camera` : name;
+}
+
+function currentCamera() {
+  return cameraFeed.names[cameraFeed.index];
+}
+
+async function fetchCameraFrame(name, etag) {
+  const headers = etag ? { 'If-None-Match': etag } : {};
+  const response = await fetch(`/api/camera/${encodeURIComponent(name)}`, { cache: 'no-store', headers });
+  if (response.status === 304 || response.status === 503) return null;   // same frame as before, or not rendered yet
+  if (!response.ok) throw new Error(`camera request failed (${response.status})`);
+  return { blob: await response.blob(), etag: response.headers.get('ETag'), frameId: response.headers.get('X-Frame-Id'), simTime: response.headers.get('X-Sim-Time') };
+}
+
+function showFrame(image, frame, holder) {
+  const url = URL.createObjectURL(frame.blob);
+  const previous = holder.objectUrl;
+  image.onload = () => { if (previous) URL.revokeObjectURL(previous); };
+  image.src = url;
+  holder.objectUrl = url;
+  holder.etag = frame.etag;
+}
+
+async function pollCamera() {
+  const name = currentCamera();
+  if (!name || cameraFeed.busy || !$('camera-live').checked || document.hidden) return;
+  cameraFeed.busy = true;
+  try {
+    const frame = await fetchCameraFrame(name, cameraFeed.etag);
+    if (frame) {
+      showFrame($('camera-image'), frame, cameraFeed);
+      $('camera-caption').textContent = `${cameraLabel(name)} · frame ${frame.frameId ?? '?'} · t = ${frame.simTime ?? '?'} s`;
+    }
+    cameraFeed.failures = 0;
+  } catch (error) {
+    cameraFeed.failures += 1;
+    if (cameraFeed.failures === 3) $('camera-caption').textContent = 'Camera feed unavailable';
+  } finally {
+    cameraFeed.busy = false;
+  }
+  // Thumbnails refresh round-robin, one camera per tick, so every preview stays live at a low rate.
+  if (cameraFeed.names.length > 1 && !cameraFeed.thumbBusy) {
+    cameraFeed.thumbBusy = true;
+    const thumbName = cameraFeed.names[cameraFeed.thumbCursor % cameraFeed.names.length];
+    cameraFeed.thumbCursor += 1;
+    const holder = cameraFeed.thumbs.get(thumbName);
+    try {
+      const frame = await fetchCameraFrame(thumbName, holder.etag);
+      if (frame) showFrame(holder.image, frame, holder);
+    } catch (error) { /* main view reports feed problems */ } finally { cameraFeed.thumbBusy = false; }
+  }
+}
+
+function selectCamera(index, { focusSlider = false } = {}) {
+  const count = cameraFeed.names.length;
+  if (!count) return;
+  cameraFeed.index = ((index % count) + count) % count;
+  cameraFeed.etag = null;                                         // force a fresh frame of the new camera
+  const name = currentCamera();
+  $('camera-title').textContent = cameraLabel(name);
+  $('camera-index').textContent = `${cameraFeed.index + 1} / ${count}`;
+  $('camera-caption').textContent = `${cameraLabel(name)} · waiting for frame…`;
+  $('camera-slider').value = String(cameraFeed.index);
+  for (const [thumbName, holder] of cameraFeed.thumbs) {
+    const active = thumbName === name;
+    holder.button.classList.toggle('active', active);
+    holder.button.setAttribute('aria-selected', String(active));
+    if (active) holder.button.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  }
+  if (focusSlider) $('camera-slider').focus();
+}
+
+function setupCameraLayout() {
+  const row = $('view-row');
+  const button = $('camera-layout');
+  let sideBySide = true;                                          // default: world view and camera next to each other
+  try { const saved = localStorage.getItem('blimp.cameraLayout'); if (saved) sideBySide = saved === 'side'; } catch (error) { /* storage unavailable */ }
+  const apply = () => {
+    row.classList.toggle('side-by-side', sideBySide);
+    button.textContent = sideBySide ? 'Stack below' : 'Side by side';
+    button.setAttribute('aria-pressed', String(sideBySide));
+  };
+  button.addEventListener('click', () => {
+    sideBySide = !sideBySide;
+    try { localStorage.setItem('blimp.cameraLayout', sideBySide ? 'side' : 'stack'); } catch (error) { /* ignore */ }
+    apply();
+    button.blur();
+  });
+  apply();
+}
+
+function setupCameras(config) {
+  const names = Array.isArray(config.cameras) ? config.cameras : [];
+  cameraFeed.names = names;
+  const panel = $('camera-panel');
+  if (!names.length) {                                           // say why there is no stream instead of hiding silently
+    panel.classList.add('unavailable');
+    $('camera-unavailable').hidden = false;
+    panel.hidden = false;
+    return;
+  }
+  panel.classList.remove('unavailable');
+  $('camera-unavailable').hidden = true;
+  setupCameraLayout();
+  const thumbs = $('camera-thumbs');
+  thumbs.replaceChildren(...names.map((name, i) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'camera-thumb';
+    button.setAttribute('role', 'tab');
+    const image = document.createElement('img');
+    image.alt = `${cameraLabel(name)} preview`;
+    image.draggable = false;
+    const label = document.createElement('span');
+    label.textContent = cameraLabel(name);
+    button.append(image, label);
+    button.addEventListener('click', () => { selectCamera(i); button.blur(); });
+    cameraFeed.thumbs.set(name, { button, image, etag: null, objectUrl: null });
+    return button;
+  }));
+  const slider = $('camera-slider');
+  slider.max = String(names.length - 1);
+  slider.addEventListener('input', () => selectCamera(Number(slider.value)));
+  $('camera-prev').addEventListener('click', () => { selectCamera(cameraFeed.index - 1); $('camera-prev').blur(); });
+  $('camera-next').addEventListener('click', () => { selectCamera(cameraFeed.index + 1); $('camera-next').blur(); });
+  $('camera-live').addEventListener('change', () => { if ($('camera-live').checked) cameraFeed.etag = null; });
+  // Drag/swipe on the main view: a horizontal pull of 40 px or more switches camera.
+  const frame = $('camera-frame');
+  frame.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    cameraFeed.drag = { x: event.clientX, id: event.pointerId };
+    frame.classList.add('dragging');
+    frame.setPointerCapture(event.pointerId);
+  });
+  const endDrag = (event) => {
+    if (!cameraFeed.drag || event.pointerId !== cameraFeed.drag.id) return;
+    const dx = event.clientX - cameraFeed.drag.x;
+    cameraFeed.drag = null;
+    frame.classList.remove('dragging');
+    if (dx <= -40) selectCamera(cameraFeed.index + 1);
+    else if (dx >= 40) selectCamera(cameraFeed.index - 1);
+  };
+  frame.addEventListener('pointerup', endDrag);
+  frame.addEventListener('pointercancel', () => { cameraFeed.drag = null; frame.classList.remove('dragging'); });
+  frame.addEventListener('wheel', (event) => {
+    if (Math.abs(event.deltaX) > Math.abs(event.deltaY) && Math.abs(event.deltaX) > 20) {
+      event.preventDefault();
+      selectCamera(cameraFeed.index + (event.deltaX > 0 ? 1 : -1));
+    }
+  }, { passive: false });
+  panel.hidden = false;
+  selectCamera(Math.max(0, names.indexOf('blimp')));
+  if (cameraFeed.timer) clearInterval(cameraFeed.timer);
+  cameraFeed.timer = setInterval(pollCamera, 100);              // main view up to 10 frames/s per tab
+}
+
 function renderLoop() {
   if (app.state && app.scene?.ready && app.state.seq !== app.lastSceneSeq) {
     app.scene.update(app.state, app.config);
@@ -506,6 +669,7 @@ async function initialize() {
     return;
   }
   buildParameters(app.config.parameters || []);
+  setupCameras(app.config);
   try {
     const scene = new SimulationScene($('scene-canvas'), () => { $('scene-error').hidden = false; });
     app.scene = scene;

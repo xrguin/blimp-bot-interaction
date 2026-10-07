@@ -1,0 +1,5 @@
+# Optional: contact-based MuJoCo rovers, vehicle cameras and the MuJoCo viewer (sim/mujoco_world.py, run_mujoco_gui.py).
+# Install on top of requirements-web.txt. OpenCV provides JPEG encoding for the browser camera streams
+# and the camera/joystick window of run_mujoco_gui.py.
+mujoco==3.15.0
+opencv-python==5.0.0.93

@@ -69,6 +69,8 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rovers", choices=["idle", "circle"], default="idle")
+    ap.add_argument("--rovers-backend", choices=["ideal", "mujoco"], default="ideal",
+                    help="ideal unicycle rovers (default) or contact-based MuJoCo rovers (needs the mujoco package)")
     ap.add_argument("--gain", type=float, default=0.4)
     ap.add_argument("--n", type=int, default=4)
     ap.add_argument("--npz", default=None)
@@ -88,7 +90,7 @@ def main():
             plt.rcParams[k] = []
     from sim.viewer import Viewer
 
-    P = SimParams(T_end=1e9); P.task.n_rovers = a.n
+    P = SimParams(T_end=1e9, rover_backend=a.rovers_backend); P.task.n_rovers = a.n
     P.task.pid_enabled = bool(a.hold)
     sim = TeamSim(P)
     hold = BlimpPD(P.task, dt=P.dt_ctrl)

@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import webbrowser
 
 import anyio
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -33,6 +33,11 @@ def allowed_origin(websocket):
         return parsed.scheme in ("http", "https") and parsed.hostname in LOOPBACK_HOSTS and port == server_port and not parsed.username and not parsed.password
     except ValueError:
         return False
+
+
+def cameras_enabled(rover_backend: str, flag) -> bool:
+    """Camera streams default to on with the MuJoCo backend; --cameras/--no-cameras override."""
+    return rover_backend == "mujoco" if flag is None else bool(flag)
 
 
 def create_app(runtime=None):
@@ -63,6 +68,21 @@ def create_app(runtime=None):
     async def export():
         data = await asyncio.wrap_future(runtime.export())
         return Response(data, media_type="application/octet-stream", headers={"Content-Disposition": 'attachment; filename="blimp-session.npz"', "Cache-Control": "no-store"})
+
+    @app.get("/api/camera/{name}")
+    async def camera(name: str, request: Request):
+        """Latest frame of one vehicle camera (JPEG when an encoder is installed, else PNG)."""
+        if name not in runtime.camera_names():
+            return Response(status_code=404)
+        frame = await asyncio.to_thread(runtime.camera_frame, name)
+        if frame is None:                                     # worker has not rendered its first frame yet
+            return Response(status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"})
+        frame_id, sim_time, data, media = frame
+        etag = f'"{runtime.generation}-{frame_id}"'
+        headers = {"Cache-Control": "no-store", "ETag": etag, "X-Frame-Id": str(frame_id), "X-Sim-Time": f"{sim_time:.3f}"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return Response(data, media_type=media, headers=headers)
 
     @app.get("/")
     async def index():
@@ -146,13 +166,19 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--mode", choices=["teleop", "auto"], default="teleop")
     parser.add_argument("--rovers", choices=["circle", "idle"], default="circle")
+    parser.add_argument("--rovers-backend", choices=["ideal", "mujoco"], default="ideal",
+                        help="ideal unicycle rovers (default) or contact-based MuJoCo rovers (needs the mujoco package)")
+    parser.add_argument("--cameras", dest="cameras", action="store_true", default=None,
+                        help="render the rover/blimp cameras and stream them to the browser (default with --rovers-backend mujoco)")
+    parser.add_argument("--no-cameras", dest="cameras", action="store_false", help="disable the camera streams")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("Port must be between 1 and 65535")
     try:
-        runtime = SimulationRuntime(n=args.n, seed=args.seed, mode=args.mode, rovers_mode=args.rovers)
-    except ValueError as exc:
+        runtime = SimulationRuntime(n=args.n, seed=args.seed, mode=args.mode, rovers_mode=args.rovers,
+                                    rover_backend=args.rovers_backend, cameras=cameras_enabled(args.rovers_backend, args.cameras))
+    except (ValueError, ImportError) as exc:
         parser.error(str(exc))
     url = f"http://127.0.0.1:{args.port}"
     print(f"Blimp control panel: {url}\nStarts paused. Press Run in the browser. Ctrl+C stops the server.")

@@ -6,3 +6,6 @@ results/teleop_*.png
 results/teleop*.npz
 # the ICARCV 2018 paper is copyrighted (IEEE): keep it local, out of the repo
 ICARV_08581376.pdf
+
+# scenario outputs written by the README examples (camera frames, plots)
+out/

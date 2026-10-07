@@ -121,6 +121,39 @@ class RoverParams:
 
 
 @dataclass
+class MujocoParams:
+    """Contact-based rover team in MuJoCo; used only when SimParams.rover_backend == "mujoco".
+
+    Rover geometry is TurtleBot3 Burger-like (wheel radius 0.033 m, wheel separation 0.16 m,
+    about 1 kg). The MuJoCo world is z-up; the rest of the simulator is NED. Nothing here is a
+    hardware measurement of the lab platform.
+    """
+    timestep: float = 0.002            # MuJoCo integration step (s); dt_phys must be a multiple
+    wheel_radius: float = 0.033        # m
+    wheel_separation: float = 0.160    # m, between wheel centres
+    wheel_width: float = 0.018         # m
+    wheel_mass: float = 0.03           # kg each
+    chassis_size: tuple = (0.07, 0.07, 0.06)    # half-sizes (m), body frame x forward / y left / z up
+    chassis_offset: tuple = (-0.03, 0.0, 0.05)  # chassis centre relative to the axle midpoint (m)
+    chassis_mass: float = 0.85         # kg
+    caster_radius: float = 0.012       # m, frictionless rear ball
+    caster_offset_x: float = -0.09     # m, behind the axle
+    wheel_kv: float = 0.004            # wheel velocity-loop P gain (N m s/rad); ~0.12 s speed time constant
+    wheel_ki: float = 0.004            # wheel velocity-loop I gain (N m/rad) at the physics rate; ~11 % speed overshoot, <0.5 % steady error; 0 = P only
+    wheel_torque_max: float = 0.15     # N m per wheel
+    friction: float = 1.0              # sliding friction, floor/wheels
+    arena_walls: bool = True           # low walls at the arena boundary (collide with rovers)
+    # --- vehicle cameras (rendered only when SimParams.cameras is True) ---
+    cam_width: int = 640
+    cam_height: int = 480
+    cam_fovy: float = 90.0             # vertical field of view (deg)
+    rover_cam_pos: tuple = (0.065, 0.0, 0.13)  # relative to the axle midpoint (m); just ahead of and above the chassis front edge
+    rover_cam_pitch_deg: float = 10.0  # rover camera tilt below the horizon (deg, + down); live-adjustable
+    blimp_cam_offset: float = 0.01     # camera this far below the lowest gondola surface (m)
+    blimp_cam_tilt_deg: float = 90.0   # blimp camera tilt: 90 = straight down, 0 = straight ahead (body x); live-adjustable
+
+
+@dataclass
 class TaskParams:
     n_rovers: int = 4
     circle_center: tuple = (0.0, 0.0)
@@ -153,8 +186,11 @@ class SimParams:
     arena: float = 6.0           # m, square arena side (drawing/limits)
     floor_alt: float = 0.0       # m, minimum gondola-bottom clearance
     ceiling_alt: float = 4.0     # m, maximum gondola-bottom clearance
+    rover_backend: str = "ideal" # "ideal" (exact unicycle) or "mujoco" (contact-based, needs the mujoco package)
+    cameras: bool = False        # render vehicle cameras each control step (requires rover_backend == "mujoco")
     blimp: BlimpParams = field(default_factory=BlimpParams)
     rover: RoverParams = field(default_factory=RoverParams)
+    mujoco: MujocoParams = field(default_factory=MujocoParams)
     task: TaskParams = field(default_factory=TaskParams)
     view: ViewParams = field(default_factory=ViewParams)
 
@@ -169,6 +205,13 @@ SLIDERS = [
     ("task", "kp_pos", 0.0, 0.15), ("task", "kd_pos", 0.0, 0.40), ("task", "ki_pos", 0.0, 0.02), ("task", "i_max_N", 0.0, 0.5),
     ("task", "circle_radius", 0.5, 2.5), ("task", "rover_speed", 0.0, 0.5), ("task", "blimp_height", 0.0, 2.5),
     ("view", "force_scale", 1.0, 200.0),
+]
+
+
+# Browser-only controls for the MuJoCo backend (the Matplotlib panel is laid out for SLIDERS alone):
+# camera tilt angles in degrees, applied to the live MuJoCo model without a rebuild.
+MUJOCO_SLIDERS = [
+    ("mujoco", "blimp_cam_tilt_deg", 0.0, 90.0), ("mujoco", "rover_cam_pitch_deg", -30.0, 60.0),
 ]
 
 

@@ -14,7 +14,8 @@ import numpy as np
 from .blimp import R_zyx
 from .controllers import BlimpPD, CircleTracker
 from .keyboard import KeyboardBlimpController
-from .params import G, SLIDERS, SimParams
+from .params import G, MUJOCO_SLIDERS, SLIDERS, SimParams
+from .png import encode_image
 from .sim import TeamSim
 
 
@@ -30,11 +31,14 @@ PARAMETER_LABELS = {
     "ki_pos": ("Position integral gain", "N/(m s)"), "i_max_N": ("Integral force limit", "N"),
     "circle_radius": ("Circle radius", "m"), "rover_speed": ("Rover speed", "m/s"),
     "blimp_height": ("Desired altitude", "m"), "force_scale": ("Force arrow scale", "m/N"),
+    "blimp_cam_tilt_deg": ("Blimp camera tilt", "°"), "rover_cam_pitch_deg": ("Rover camera pitch", "°"),
 }
 PARAMETER_DESCRIPTIONS = {
     "net_lift_g": "Positive lifts upward; negative adds downward load. Equivalent weight only.",
+    "blimp_cam_tilt_deg": "90 looks straight down, 0 straight ahead along the blimp's nose. Applied live to the MuJoCo camera.",
+    "rover_cam_pitch_deg": "Tilt of the rover forward cameras below the horizon (negative looks up). Applied live.",
 }
-PARAMETER_BOUNDS = {f"{group}.{name}": (group, name, low, high) for group, name, low, high in SLIDERS}
+PARAMETER_BOUNDS = {f"{group}.{name}": (group, name, low, high) for group, name, low, high in SLIDERS + MUJOCO_SLIDERS}
 MATRIX_PARAMETERS = {"blimp.k_add_xy", "blimp.k_add_z", "blimp.I_z"}
 MOVEMENT_KEYS = frozenset("wasdqerf")
 
@@ -104,15 +108,24 @@ class SimulationRuntime:
     """
     KEY_TIMEOUT = 0.35
 
-    def __init__(self, n=4, seed=0, mode="teleop", rovers_mode="circle"):
+    def __init__(self, n=4, seed=0, mode="teleop", rovers_mode="circle", rover_backend="ideal", cameras=False):
         if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 32:
             raise ValueError("Rover count must be between 1 and 32")
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32:
             raise ValueError("Seed must be an integer between 0 and 4294967295")
         if mode not in ("teleop", "auto") or rovers_mode not in ("circle", "idle"):
             raise ValueError("Invalid simulation mode")
-        self.P = SimParams(seed=seed)
+        if rover_backend not in ("ideal", "mujoco"):
+            raise ValueError("Rover backend must be 'ideal' or 'mujoco'")
+        if cameras and rover_backend != "mujoco":
+            raise ValueError("Cameras require the mujoco rover backend")
+        # Cameras are switched on from the worker thread (GL contexts are thread-bound), so the
+        # simulator is built without them and the first frames are rendered when the worker starts.
+        self.P = SimParams(seed=seed, rover_backend=rover_backend)
         self.P.task.n_rovers = n
+        self.cameras = bool(cameras)
+        self._frames = None                 # (frame_meta, {name: rgb}) from the latest render
+        self._encoded = {}                  # name -> (frame id, bytes, media type)
         self.sim = TeamSim(self.P)
         self.keyboard = KeyboardBlimpController(self.sim.blimp, key_timeout=0, hold=BlimpPD(self.P.task, dt=self.P.dt_ctrl))
         self.autopilot = BlimpPD(self.P.task, dt=self.P.dt_ctrl)
@@ -167,7 +180,11 @@ class SimulationRuntime:
         if action == "param":
             key, value = command["key"], command["value"]
             group, name, _, _ = PARAMETER_BOUNDS[key]
+            if group == "mujoco" and self.sim.world is None:
+                raise ValueError("Camera parameters need the MuJoCo rover backend")
             setattr(getattr(self.P, group), name, value)
+            if group == "mujoco":
+                self.sim.world.set_camera_angles()
             if key in MATRIX_PARAMETERS:
                 self.sim.blimp.rebuild()
             if key == "blimp.T_max":
@@ -239,12 +256,34 @@ class SimulationRuntime:
     def _publish(self):
         state = self._make_state()
         self.seq = state["seq"]
+        frames = (self.generation, self.sim.frame_meta, self.sim.frames) if self.sim.frames else None
         with self._lock:
             self._snapshot = state
+            self._frames = frames
 
     def snapshot(self):
         with self._lock:
             return copy.deepcopy(self._snapshot)
+
+    # ------------------------------------------------------------ cameras
+    def camera_names(self):
+        return list(self.sim.world.frame_names) if self.cameras and self.sim.world is not None else []
+
+    def camera_frame(self, name):
+        """Latest encoded frame for one camera: (frame id, sim time, bytes, media type) or None."""
+        if name not in self.camera_names():
+            return None
+        with self._lock:
+            frames = self._frames
+        if frames is None or name not in frames[2]:
+            return None
+        generation, meta, images = frames
+        cached = self._encoded.get(name)
+        if cached is None or cached[0] != (generation, meta["k"]):
+            data, media = encode_image(images[name])
+            cached = ((generation, meta["k"]), data, media)
+            self._encoded[name] = cached
+        return meta["k"], meta["t"], cached[1], cached[2]
 
     def config(self):
         state = self.snapshot()
@@ -253,14 +292,16 @@ class SimulationRuntime:
             "parameters": [{"key": key, "group": group, "label": PARAMETER_LABELS[name][0],
                             "min": low, "max": high, "value": state["params"][key], "unit": PARAMETER_LABELS[name][1],
                             **({"description": PARAMETER_DESCRIPTIONS[name]} if name in PARAMETER_DESCRIPTIONS else {})}
-                           for key, (group, name, low, high) in PARAMETER_BOUNDS.items()],
+                           for key, (group, name, low, high) in PARAMETER_BOUNDS.items()
+                           if group != "mujoco" or self.sim.world is not None],
             "dt_phys": self.P.dt_phys, "dt_ctrl": self.P.dt_ctrl,
             "geometry": {"r_env": self.P.blimp.r_env, "h_env": self.P.blimp.h_env,
                          "d_VM": self.P.blimp.d_VM, "d_VT": self.P.blimp.d_VT,
                          "gondola_size": self.P.blimp.gondola_size.tolist(),
                          "thruster_length": self.P.blimp.thruster_length, "thruster_radius": self.P.blimp.thruster_radius,
                          "thruster_positions": positions.tolist(), "thruster_axes": axes.tolist(), "rover_length": self.P.rover.body_len},
-            "arena": self.P.arena, "seed": self.P.seed, "n_rovers": len(self.sim.rovers),
+            "arena": self.P.arena, "seed": self.P.seed, "n_rovers": len(self.sim.rovers), "rover_backend": self.P.rover_backend,
+            "cameras": self.camera_names(), "camera_size": [self.P.mujoco.cam_width, self.P.mujoco.cam_height],
         }
 
     def submit(self, message):
@@ -290,18 +331,12 @@ class SimulationRuntime:
         n = len(self.sim.rovers)
         widths = {"t": (), "blimp_nu": (6,), "blimp_eta": (6,), "blimp_u": (6,),
                   "blimp_thrust": (6,), "blimp_lift": (), "blimp_bottom_altitude": (),
-                  "rover_q": (n, 3), "rover_u": (n, 2), "rover_ref": (n, 2)}
+                  "rover_q": (n, 3), "rover_u": (n, 2), "rover_ref": (n, 2), "rover_v": (n, 2), "rover_wheel_w": (n, 2)}
         for key, shape in widths.items():
-            log[key] = log[key].reshape((-1,) + shape)
+            if key in log:
+                log[key] = log[key].reshape((-1,) + shape)
         output = io.BytesIO()
-        np.savez(output, t=log["t"][:-1], X=log["blimp_nu"][:-1], U=log["blimp_u"][:-1], X_next=log["blimp_nu"][1:],
-                 Eta=log["blimp_eta"][:-1], Eta_next=log["blimp_eta"][1:], rover_X=log["rover_q"][:-1],
-                 rover_U=log["rover_u"][:-1], rover_X_next=log["rover_q"][1:], rover_ref=log["rover_ref"][:-1],
-                 blimp_thrust=log["blimp_thrust"][:-1], blimp_lift=log["blimp_lift"][:-1],
-                 blimp_bottom_altitude=log["blimp_bottom_altitude"][:-1], blimp_bottom_altitude_next=log["blimp_bottom_altitude"][1:],
-                 eta_reference="CV_NED", altitude_reference="gondola_bottom", gondola_size=self.P.blimp.gondola_size,
-                 thruster_length=self.P.blimp.thruster_length, thruster_radius=self.P.blimp.thruster_radius, d_VT=self.P.blimp.d_VT,
-                 dt=self.P.dt_ctrl, n_rovers=n, seed=self.P.seed)
+        np.savez(output, **self.sim.npz_arrays(log))
         return output.getvalue()
 
     def start(self):
@@ -322,6 +357,10 @@ class SimulationRuntime:
                 future.set_exception(RuntimeError("Simulation stopped"))
 
     def _run(self):
+        if self.cameras and not self.P.cameras:
+            self.P.cameras = True
+            self.sim._render_frames()
+            self._publish()
         next_step = time.monotonic() + self.P.dt_ctrl
         last_step = None
         while not self._stop.is_set():
@@ -370,3 +409,4 @@ class SimulationRuntime:
                     next_step = time.monotonic()
             self._publish()
             self._wake.wait(max(0.001, min(0.05, next_step - time.monotonic())))
+        self.sim.close()                        # the renderer belongs to this thread

@@ -98,6 +98,113 @@ Browser-backend checks (the extra dependency is only needed for testing):
 Scenario 1: rovers run a circle (radius 1.5 m, 0.2 m/s, equally spaced); the blimp flies to the
 circle centre and holds 1 m altitude.
 
+## MuJoCo rovers and vehicle cameras (optional)
+
+Setting up a new Ubuntu machine from scratch (system packages, virtual environment, pinned
+requirements, verification, headless rendering): see **[INSTALL.md](INSTALL.md)**.
+
+By default the rovers are exact unicycles and nothing is rendered in Python. With the optional
+`mujoco` package (`pip install -r requirements-mujoco.txt`, tested with MuJoCo 3.15.0), the
+rovers can instead be stepped by MuJoCo as contact-based differential drives, and the rover and
+blimp cameras can be rendered:
+
+    python run_circle.py --rovers-backend mujoco --T 20 --plots results/circle_mujoco.png
+    python run_circle.py --rovers-backend mujoco --T 20 --frames out/frames --frame-every 4
+    python web_server.py --rovers-backend mujoco             # browser GUI + live camera panel (--no-cameras to skip)
+    python teleop_blimp.py --rovers-backend mujoco --rovers circle
+    python run_mujoco_gui.py                                 # MuJoCo's own interactive viewer
+
+**MuJoCo viewer** (`run_mujoco_gui.py`, previews `results/mujoco_gui.jpg` and
+`results/mujoco_camera_window.jpg`): MuJoCo's native GUI running the scenario, by default with
+the blimp on latched keyboard teleop with hold assist (`--mode auto` for the autopilot). The left
+panel has the rendering, visualization (contact points/forces, camera frustums), physics-option
+and watch panels; the right panel has joint sliders and the wheel-actuator **Control** sliders;
+*Rendering → Camera* switches the main view to a rover or blimp camera. The vehicle camera
+streams are overlaid inside the viewer: a strip of live thumbnails along the bottom (sized to the
+viewport) and the selected camera enlarged at the bottom right; a HUD at the top left shows time,
+blimp position/clearance, latched keys, hold state and mode. A second **Vehicle cameras**
+window (OpenCV, `--no-camera-window` to skip) shows the same streams as a grid.
+
+Physics is stepped by the script at the fixed 100 Hz / 20 Hz rates, so the viewer's own Run and
+speed controls are inactive. The blimp plant and keyboard controller are the same objects the
+browser uses (a 0.5 s tap here reproduces holding W for 0.5 s in the browser bit-for-bit; see
+`test_pulse_tap_matches_browser_key_hold`). What differs is the input: the viewer reports key
+presses only (no releases), so a flight key is a **pulse** — one tap applies the command for
+`--pulse` seconds of simulated time (default 0.5 s), tapping again renews it, the opposite key
+replaces it and Space releases all; with hold assist on, idle axes are held by the PID.
+Holding a key in the camera window behaves like holding it in the browser: the key auto-repeat
+keeps renewing the command, which ends about 0.1 s after release (the same hold produces the
+same flight as the browser to within that tail). For
+continuous control, **drag with the left mouse button in the camera window** like two
+thumbsticks: a drag begun in the left half gives surge/sway, in the right half up-down/yaw,
+proportional to the drag distance (`--stick-radius` px = full command); releasing the button
+zeroes the command. Avoid the right mouse button there: OpenCV's Qt window grabs it and the
+loop stalls while it is held. MuJoCo reserves every letter key for its own toggles (W wireframe,
+S shadows, Q camera frustums, H convex hulls, …) and still applies them when it forwards the
+key, so letters are only read when the **camera window** has focus:
+
+| Where | Keys |
+| --- | --- |
+| MuJoCo viewer | ↑/↓ surge · ←/→ sway · PgUp/PgDn up/down · Home/End yaw · Tab hold assist (PID in auto mode) · Del manual wheels (Control sliders drive the wheels) |
+| Camera window | W/S surge · A/D sway · Q/E up/down · F/R yaw · H hold · M manual wheels · P pause · left-drag thumbsticks (left half surge/sway, right half up-down/yaw) |
+| Both | Space release all · Enter pause/run · Backspace reset · +/− manual gain · 1–9 select a camera, 0 grid · Esc quits the viewer |
+
+The camera window also carries two trackbars that re-aim the cameras live (blimp camera tilt
+0–90°, rover camera pitch −30…60°); `--blimp-cam-tilt` and `--rover-cam-pitch` set them at
+start, and the HUD shows the current angles.
+
+Options: `--n`, `--seed`, `--speed`, `--gain`, `--pulse`, `--stick-radius`, `--rover-speed`, `--circle-radius`, `--no-cameras`,
+`--T` (quit after N seconds) and `--dump-mjcf FILE` (model for `python -m mujoco.viewer --mjcf FILE`).
+The camera renderer uses EGL in this script so it never shares GLFW state with the viewer
+thread (`MUJOCO_GL=glfw python run_mujoco_gui.py` if EGL is unavailable). Blimp parameters are
+not editable here; use the browser panel.
+
+**Browser camera panel** (`web_server.py --rovers-backend mujoco`; streams are on by default with
+the MuJoCo backend, `--no-cameras` disables them; preview
+`results/web_gui_mujoco_cameras.jpg`): a carousel beside the 3D world view (the default on
+wide windows; **Stack below / Side by side** toggles the layout and the choice is remembered in
+the browser; narrow windows always stack) shows the selected camera at up to 10 frames/s with
+its frame id and simulation time, plus live thumbnails of every camera. Switch with the ‹ ›
+arrows, the slider, a horizontal drag on the image, a sideways scroll, or by clicking a
+thumbnail; the **Live** switch pauses polling. Frames come from
+`GET /api/camera/<name>` (JPEG via OpenCV or Pillow when installed, otherwise PNG) with
+`ETag`/`If-None-Match` so a paused simulation costs almost nothing. The camera list and size
+are in `/api/config` (`cameras`, `camera_size`). A **Cameras (MuJoCo)** group in the tuning
+panel (slider + number box, only with the MuJoCo backend) sets the **blimp camera tilt**
+(90° = straight down, 0° = straight ahead along the nose; `MujocoParams.blimp_cam_tilt_deg`)
+and the **rover camera pitch** (−30…60° below the horizon). Both are applied live: the camera
+mounting quaternion in the MuJoCo model is rewritten and the next frame uses it, no rebuild. Without the MuJoCo backend (plain
+`python web_server.py`, or the `.venv` without the `mujoco` package) the panel shows a note
+explaining how to start the streams instead of a feed.
+
+What changes with `--rovers-backend mujoco`:
+
+* **Rovers** are TurtleBot3-Burger-like (wheel radius 0.033 m, wheel separation 0.16 m, ~0.95 kg,
+  frictionless rear caster). Each wheel has a PI velocity loop (≈0.12 s speed time constant,
+  torque limit 0.15 N m). Slip, actuator lag, wheel/floor contact, rover–rover collisions and
+  the low arena walls come from the engine. Speed limits remain `RoverParams` (0.5 m/s, 3 rad/s;
+  a real Burger is slower). `command(v, ω)` and `q = (x, y, θ)` are unchanged, so the circle
+  tracker, GUI and NPZ schema keep working; logs gain measured `rover_v` (speed, NED yaw rate) and
+  wheel speeds, exported as `rover_V`, `rover_V_next`, `rover_wheel_W` with `rover_backend="mujoco"`.
+* **Blimp** dynamics stay in `sim/blimp.py` (MuJoCo has no buoyancy or added-mass model). Its pose
+  is mirrored into a MuJoCo mocap body every physics step; the blimp body does not collide in v1.
+* **Cameras** (`--cameras`, or `--frames DIR` which implies it): one forward RGB camera per rover
+  (on the chassis front edge, tilted 10° down) and one downward camera under the gondola, 640×480,
+  90° vertical FOV. They are rendered once per 20 Hz control step after the physics, so frame
+  `k` shows the state used by controller call `k` and matches log row `k`. The latest frames are
+  in `sim.frames` (`"rover0"`, …, `"blimp"`, uint8 RGB) with `sim.frame_meta` (frame id, time,
+  intrinsics, camera poses in NED). `--frames` writes PNGs plus `index.csv` (id, time, camera,
+  file, NED position, OpenCV-convention orientation quaternion) and `cameras.json`.
+* **Timing:** MuJoCo runs 2 ms substeps inside the fixed 10 ms physics step; the blimp, control
+  rate, seeds and logging are unchanged. On the test machine the circle scenario with four rovers
+  and five 640×480 cameras runs about 12× real time (≈50× without cameras).
+
+Rendering uses `MUJOCO_GL=glfw` when a display is present and `egl` otherwise; on NVIDIA
+systems the EGL vendor file is selected automatically when `__EGL_VENDOR_LIBRARY_FILENAMES`
+is unset. Rover geometry and gains live in `MujocoParams` (`sim/params.py`); they are
+placeholders for the lab platform, not measurements. Tests: `python -m pytest sim/tests/test_mujoco_world.py`
+(skipped automatically when `mujoco` is missing).
+
 ## Altitude prediction lesson: collect data
 
 The first lesson records **simulated vertical flight at neutral trim**. It does not fit a model.
@@ -192,6 +299,9 @@ visible, with the slider handle at the nearest limit.
     sim/params.py       all parameters; [paper] vs [slider]; SLIDERS list drives the GUI
     sim/blimp.py        6-DoF Fossen-form blimp, 6-thruster BlueROV-style allocation, RK4
     sim/rover.py        exact unicycle + hand-point feedback linearization
+    sim/mujoco_world.py optional MuJoCo rover team (contact, wheel loops), blimp mocap mirror, cameras, PNG recorder
+    sim/png.py          dependency-free PNG encoder and JPEG/PNG frame encoding for the camera feed
+    run_mujoco_gui.py   MuJoCo's interactive viewer: latched teleop, camera overlays/HUD, optional OpenCV camera window
     sim/controllers.py  circle tracker (rovers), position PD on the blimp's centre of mass
     sim/sim.py          TeamSim: reset/step/run, 100 Hz physics / 20 Hz control, npz logging
     sim/viewer.py       3D viewer, HUD, force arrows, sliders, headless video
@@ -200,6 +310,8 @@ visible, with the slider handle at the nearest limit.
     web_server.py       loopback server, browser state stream, control ownership
     web/               browser controls, Three.js scene and locally bundled vendor assets
     requirements-web.txt  tested Python dependencies for the browser GUI
+    requirements-mujoco.txt  optional MuJoCo + OpenCV dependencies for --rovers-backend mujoco
+    INSTALL.md          from-scratch Ubuntu setup and verification guide
     teleop_blimp.py     keyboard teleop entry point (+ --self-test)
     sim/tests/          verification
     run_circle.py       scenario entry point

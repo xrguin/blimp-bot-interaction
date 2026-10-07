@@ -26,6 +26,7 @@
 
     <main class="workspace">
       <section class="visual-column" aria-label="Simulation view">
+        <div id="view-row" class="view-row">
         <div id="scene-panel" class="scene-panel">
           <canvas id="scene-canvas" tabindex="0" aria-label="Three-dimensional blimp and rover scene"></canvas>
           <div class="scene-overlay scene-title">
@@ -46,6 +47,35 @@
             <span><i class="legend-line force"></i>Thruster force</span>
             <span><i class="legend-line reference"></i>Reference</span>
           </div>
+        </div>
+
+        <section id="camera-panel" class="camera-panel" aria-label="Vehicle cameras" hidden>
+          <div id="camera-unavailable" class="camera-unavailable" hidden>
+            <p class="eyebrow">Vehicle cameras</p>
+            <strong>No camera streams in this session.</strong>
+            <span>Camera streams come from the MuJoCo rover backend. Start the server with
+              <code>python web_server.py --rovers-backend mujoco</code> (in an environment with the <code>mujoco</code> package)
+              and reload this page.</span>
+          </div>
+          <div class="camera-heading">
+            <div><p class="eyebrow">Vehicle cameras · MuJoCo</p><h2 id="camera-title">Camera</h2></div>
+            <div class="camera-controls">
+              <span id="camera-index" class="badge muted">1 / 1</span>
+              <label class="switch-control compact"><input id="camera-live" type="checkbox" checked><span class="switch"></span><span>Live</span></label>
+              <button id="camera-layout" type="button" class="icon-button" title="Show the camera next to or below the world view">Stack below</button>
+            </div>
+          </div>
+          <div class="camera-stage">
+            <button id="camera-prev" type="button" class="camera-arrow" aria-label="Previous camera">‹</button>
+            <div id="camera-frame" class="camera-frame" title="Drag left or right to switch camera">
+              <img id="camera-image" alt="Latest frame from the selected vehicle camera" draggable="false">
+              <span id="camera-caption" class="camera-caption">Waiting for frames…</span>
+            </div>
+            <button id="camera-next" type="button" class="camera-arrow" aria-label="Next camera">›</button>
+          </div>
+          <input id="camera-slider" type="range" min="0" max="0" step="1" value="0" aria-label="Camera selector">
+          <div id="camera-thumbs" class="camera-thumbs" role="tablist" aria-label="All cameras"></div>
+        </section>
         </div>
 
         <section class="instrument-grid" aria-label="Vehicle information">

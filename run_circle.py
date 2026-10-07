@@ -63,13 +63,20 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--net-lift", type=float, default=0.0, help="B - W in N (negative = heavy blimp)")
     ap.add_argument("--T-max", type=float, default=None, help="override thrust per thruster (N)")
+    ap.add_argument("--rovers-backend", choices=["ideal", "mujoco"], default="ideal",
+                    help="ideal unicycle rovers (default) or contact-based MuJoCo rovers (needs the mujoco package)")
+    ap.add_argument("--cameras", action="store_true", help="render rover/blimp cameras each control step (MuJoCo backend)")
+    ap.add_argument("--frames", default=None, help="save camera frames as PNG + index into this directory (headless run; implies --cameras)")
+    ap.add_argument("--frame-every", type=int, default=1, help="save every k-th control step's frames")
     a = ap.parse_args()
 
-    P = SimParams(T_end=a.T, seed=a.seed)
+    P = SimParams(T_end=a.T, seed=a.seed, rover_backend=a.rovers_backend, cameras=a.cameras or a.frames is not None)
     P.task.n_rovers = a.n
     P.blimp.net_lift_N = a.net_lift
     if a.T_max is not None:
         P.blimp.T_max = a.T_max
+    if a.frames and (a.gui or a.mp4):
+        ap.error("--frames is for headless runs; combine it with --plots/--npz, not --gui/--mp4")
     sim = TeamSim(P)
 
     if a.gui:
@@ -89,8 +96,15 @@ def main():
         from sim.viewer import Viewer
         os.makedirs(os.path.dirname(a.mp4) or ".", exist_ok=True)
         L = Viewer(sim, gui=False).render_video(a.mp4, T=a.T, every=2)
+    elif a.frames:
+        from sim.mujoco_world import FrameRecorder
+        recorder = FrameRecorder(a.frames, every=a.frame_every)
+        sim.reset(); recorder(sim)                  # frame 0 is rendered by reset()
+        L = sim.run(a.T, callback=recorder)
+        print(f"saved {recorder.close()} camera frames to {a.frames} (index.csv, cameras.json)")
     else:
         sim.reset(); L = sim.run(a.T)
+    sim.close()
     if a.plots:
         os.makedirs(os.path.dirname(a.plots) or ".", exist_ok=True)
         summary_plots(L, a.plots, P)
