@@ -18,6 +18,12 @@ import threading
 from urllib.parse import urlsplit
 import webbrowser
 
+# Several visitor sessions render cameras from their own threads. GLFW's X11 layer is not
+# thread-safe and aborts the process when contexts are created concurrently, so the server
+# renders through EGL even when a display is present (override with MUJOCO_GL=glfw if needed).
+import os
+os.environ.setdefault("MUJOCO_GL", "egl")
+
 import anyio
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response

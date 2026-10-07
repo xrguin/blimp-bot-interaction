@@ -130,7 +130,8 @@ a smoke test over a remote desktop. This script cannot run on a headless machine
 
 * **Which GL backend is used.** `sim/mujoco_world.py` sets `MUJOCO_GL=glfw` when `DISPLAY` is
   set and `MUJOCO_GL=egl` otherwise, unless `MUJOCO_GL` is already set. `run_mujoco_gui.py`
-  uses EGL for its camera renderer regardless. Override explicitly if needed, e.g.
+  and `web_server.py` use EGL regardless (several threads create renderers; GLFW is not
+  thread-safe). Override explicitly if needed, e.g.
   `MUJOCO_GL=egl .venv/bin/python run_circle.py ...`.
 * **NVIDIA machines and EGL.** With an NVIDIA driver, EGL may fail with `EGLError` because
   glvnd tries the Mesa vendor first. The code selects

@@ -693,3 +693,20 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
 - Limits: cost figures per session are estimates from this machine; no per-visitor rate limiting
   beyond the session cap; the Tailscale route requires a reverse proxy because the server stays
   on loopback; GPT-5.6 Sol was not available for planning or review.
+
+## Concurrent-session capacity and the GLFW thread-safety fix — 2026-10-07
+
+- User asked how many people can use the website at once (expecting ≤3). Measured with a load
+  script in the `mujoco` env: N private sessions (4 MuJoCo rovers, 5 cameras at 640×480) with
+  a simulated viewer each (state 20 Hz, main camera 10 Hz, thumbnails 10 Hz). With EGL, N = 1–6
+  all held real-time factor 1.00 at ~0.4–1.2 CPU cores total, ~20 MB RSS per session (plus a
+  one-off ~150 MB for GL libraries) and 30–48 % GPU; N = 8 collapsed to 0.38× real time. The
+  limit is the single Python process (GIL), not the 24 threads, 62 GB RAM or the GPU.
+  Conservative recommendation: `--max-sessions 4` (unit file updated); upload bandwidth of
+  ~0.5 MB/s per viewer is the other practical constraint.
+- The first run aborted at N = 3 with `_glfwGrabErrorHandlerX11: Assertion ... failed` when
+  worker threads created GLFW contexts concurrently. Fixes: `web_server.py` sets
+  `MUJOCO_GL=egl` by default (overridable), and `MujocoWorld.renderer()` serialises renderer
+  creation with a module lock. The load test then ran to N = 8 without errors.
+- Limits: viewers were simulated in-process (no real HTTP/WebSocket encoding cost, which adds
+  some asyncio work per viewer); N = 7 was not measured; results are for this machine only.

@@ -39,6 +39,7 @@ import mujoco  # noqa: E402  (after the GL configuration on purpose)
 
 
 C_FLIP = np.diag([1.0, -1.0, -1.0])
+_RENDERER_LOCK = threading.Lock()      # GL context creation is not thread-safe (GLFW/X11 aborts on concurrent init)
 ROVER_COLORS = ["0.20 0.45 0.85 1", "0.95 0.55 0.15 1", "0.25 0.65 0.30 1", "0.85 0.25 0.25 1",
                 "0.55 0.35 0.75 1", "0.55 0.40 0.25 1", "0.90 0.50 0.70 1", "0.50 0.50 0.50 1"]
 
@@ -363,7 +364,8 @@ class MujocoWorld:
         tid = threading.get_ident()
         if self._renderer is None or self._renderer_thread != tid:   # GL contexts are thread-bound
             M = self.P.mujoco
-            self._renderer = mujoco.Renderer(self.model, height=M.cam_height, width=M.cam_width)
+            with _RENDERER_LOCK:
+                self._renderer = mujoco.Renderer(self.model, height=M.cam_height, width=M.cam_width)
             self._renderer_thread = tid
         return self._renderer
 

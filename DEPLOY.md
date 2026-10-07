@@ -13,11 +13,17 @@ Prerequisite: the server itself installed and verified per [INSTALL.md](INSTALL.
   further tabs of the same visitor join it (first tab controls, the others spectate). Visitors can
   choose their setup on first load: `https://blimp.example.org/?n=6&mode=auto&seed=3`
   (`n` ≤ `--max-rovers`, `mode` teleop|auto, `rovers` circle|idle).
-- **Limits.** `--max-sessions` (default 8) concurrent simulations; beyond that the page says
-  "server full" and retries every 20 s. Sessions with no open connection for `--idle-timeout`
-  seconds (default 600) are stopped and removed; the page then starts a fresh one on reconnect.
-  On this class of machine one 4-rover MuJoCo session with five 640×480 cameras costs roughly
-  5–8 % of a CPU core plus a little GPU; each viewer polls about 0.5 MB/s of camera JPEG.
+- **Limits.** `--max-sessions` (default 8; the unit file uses 4) concurrent simulations; beyond
+  that the page says "server full" and retries every 20 s. Sessions with no open connection for
+  `--idle-timeout` seconds (default 600) are stopped and removed; the page then starts a fresh
+  one on reconnect. Each viewer polls about 0.5 MB/s of camera JPEG, so three viewers need
+  roughly 12 Mbit/s of **upload** bandwidth from the host.
+- **Measured capacity (i7-13700F, RTX 3060 Ti, 62 GB).** Load test with N private sessions,
+  each with 4 MuJoCo rovers, 5 cameras at 640×480 and a simulated viewer polling at browser
+  rates: N = 1–6 all kept exactly real time (factor 1.00) at about one CPU core in total, ~20 MB
+  RAM per session and ~40 % GPU; at N = 8 every session dropped to 0.38× real time. All sessions
+  run in one Python process, so the interpreter lock is the ceiling, not RAM or the GPU.
+  Conservative setting for this machine: `--max-sessions 4`; raise to 6 only if the uplink allows.
 - **Network.** The server still binds to `127.0.0.1`. `--public-host blimp.example.org` makes it
   accept that hostname (Host header, `wss://` origin) and mark cookies `Secure` for it.
 - **Authentication.** Cloudflare Access (below) authenticates people before any request reaches
@@ -232,9 +238,10 @@ $ systemctl --user status blimp-web cloudflared  # both "active (running)"
 ```
 
 Logs: `journalctl --user -u blimp-web -f`. Edit the unit's `ExecStart` to change rover
-count, session cap or to add `--access-token`. `MUJOCO_GL=egl` in the unit lets the cameras
-render without a desktop session; on NVIDIA machines the EGL vendor file is selected
-automatically (see INSTALL.md §7).
+count, session cap or to add `--access-token`. The web server always renders through EGL
+(`MUJOCO_GL=egl` is its default even with a display): GLFW's X11 layer is not thread-safe and
+aborted the process when several sessions created renderers at once. On NVIDIA machines the
+EGL vendor file is selected automatically (see INSTALL.md §7).
 
 ## 3. Quick public link without a domain (demo only)
 
