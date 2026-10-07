@@ -1,0 +1,13 @@
+# Cloudflare Tunnel configuration for the blimp simulator (copy to ~/.cloudflared/config.yml).
+# Replace TUNNEL_ID with the id printed by `cloudflared tunnel create blimp` and blimp.example.org
+# with the hostname you routed to the tunnel (`cloudflared tunnel route dns blimp blimp.example.org`).
+tunnel: TUNNEL_ID
+credentials-file: /home/USER/.cloudflared/TUNNEL_ID.json
+
+ingress:
+  - hostname: blimp.example.org
+    service: http://127.0.0.1:8000
+    originRequest:
+      noTLSVerify: true          # the origin is plain http on loopback; TLS terminates at Cloudflare
+      connectTimeout: 10s
+  - service: http_status:404     # everything else

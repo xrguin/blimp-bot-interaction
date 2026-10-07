@@ -45,7 +45,9 @@ Primary sources: `README.md` describes the implemented simulator; `docs/PLAN.md`
 | `sim/keyboard.py` | Keyboard mapping and hold assistance |
 | `sim/viewer.py` | GUI and video rendering |
 | `sim/web_runtime.py` | Single-owner simulation worker, command validation, snapshots, and NPZ export |
-| `web_server.py` | Loopback HTTP/WebSocket server and browser launch |
+| `web_server.py` | Loopback HTTP/WebSocket server; per-visitor sessions, public hosts, access token, browser launch |
+| `sim/web_sessions.py` | Session manager: cookie identity, concurrent cap, idle reaper, shared mode |
+| `DEPLOY.md`, `deploy/` | Website publishing guide (Cloudflare Tunnel + Access), tunnel config example, systemd user units |
 | `web/` | HTML controls, telemetry, 3D scene, and offline vendor assets |
 | `requirements-web.txt` | Tested browser-server dependencies |
 | `Start Web GUI.command` | macOS launcher using the project virtual environment |
@@ -662,3 +664,32 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
 - Limits: the apt package list was assembled from the wheels' known runtime libraries, not from
   a bare container; Mesa-only EGL and the osmesa fallback were not exercised on this NVIDIA
   machine; `run_mujoco_gui.py` needs a display and was not re-tested from the venv.
+
+## Website access with per-visitor sessions — 2026-10-07
+
+- User asked how others could use the simulation through a website without installing MuJoCo
+  while the code keeps running here. Chosen: Cloudflare Tunnel with a Cloudflare Access login,
+  a private simulation per visitor, hosted on this desktop. Visitors' browsers already needed
+  nothing installed; the work was network exposure and multi-user structure.
+- Added `sim/web_sessions.py` (`SessionManager`: HttpOnly cookie identity, `max_sessions` cap
+  with 409 + Retry-After, idle reaper stopping runtimes with no open WebSocket for
+  `idle_timeout` s, shared mode for the original single world) and rewrote `web_server.py`
+  around it: `/api/config` creates or resumes the visitor's session (options `?n=&seed=&mode=&rovers=`
+  validated against `--max-rovers`), camera/log/WebSocket routes resolve the session from the
+  cookie (404 / close code 4404 without one), `--public-host` adds tunnel hostnames to the host
+  middleware and https WebSocket origins and marks cookies Secure, `--access-token` is a
+  second lock stored via `/?token=` (401 / close code 4401 otherwise), `--shared` keeps one
+  world. Control ownership moved from the app to each runtime. The page shows a session badge,
+  passes its query string on first load, retries when the server is full and starts a fresh
+  session when one expires. `DEPLOY.md` and `deploy/` document the tunnel, Access policy,
+  quick-tunnel fallback with a token, Tailscale alternative, systemd user units and limits.
+- Verified: 65 tests pass (session manager with a fake clock, origin rules, two visitors with
+  independent simulations and controllers through the FastAPI test client, cap 409, token 401
+  and redirect-cookie flow, public host accepted / unknown host 400). Live with two headless
+  Chrome profiles against a public-mode server: separate sessions (2 rovers seed 11 vs 4 rovers
+  seed 0), both controllers, one running while the other stayed at t = 0, `/health` counting 2,
+  foreign Host rejected, clean shutdown. The Cloudflare side (tunnel creation, Access policy)
+  needs the user's account and domain and was documented, not executed.
+- Limits: cost figures per session are estimates from this machine; no per-visitor rate limiting
+  beyond the session cap; the Tailscale route requires a reverse proxy because the server stays
+  on loopback; GPT-5.6 Sol was not available for planning or review.

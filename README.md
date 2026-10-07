@@ -101,7 +101,9 @@ circle centre and holds 1 m altitude.
 ## MuJoCo rovers and vehicle cameras (optional)
 
 Setting up a new Ubuntu machine from scratch (system packages, virtual environment, pinned
-requirements, verification, headless rendering): see **[INSTALL.md](INSTALL.md)**.
+requirements, verification, headless rendering): see **[INSTALL.md](INSTALL.md)**. Publishing the
+server as a website (Cloudflare Tunnel + login, a private simulation per visitor, `--public-host`,
+`--access-token`, `--max-sessions`, `--shared`): see **[DEPLOY.md](DEPLOY.md)**.
 
 By default the rovers are exact unicycles and nothing is rendered in Python. With the optional
 `mujoco` package (`pip install -r requirements-mujoco.txt`, tested with MuJoCo 3.15.0), the
@@ -312,6 +314,8 @@ visible, with the slider handle at the nearest limit.
     requirements-web.txt  tested Python dependencies for the browser GUI
     requirements-mujoco.txt  optional MuJoCo + OpenCV dependencies for --rovers-backend mujoco
     INSTALL.md          from-scratch Ubuntu setup and verification guide
+    DEPLOY.md           publishing as a website: tunnel, login, per-visitor sessions; deploy/ holds the unit files
+    sim/web_sessions.py per-visitor simulation sessions (cookie identity, cap, idle reaper, shared mode)
     teleop_blimp.py     keyboard teleop entry point (+ --self-test)
     sim/tests/          verification
     run_circle.py       scenario entry point

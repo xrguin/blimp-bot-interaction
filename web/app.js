@@ -90,7 +90,8 @@ function connect() {
     try { message = JSON.parse(event.data); } catch { return; }
     if (message.type === 'hello') {
       setControlAvailability(message.has_control);
-      showCommandError(message.has_control ? '' : 'Another browser has control. This view is read-only.');
+      showCommandError(message.has_control ? '' : 'Another tab of yours has control. This view is read-only.');
+      if (message.session) showSession(message.session);
       return;
     }
     if (message.type === 'state') {
@@ -106,11 +107,21 @@ function connect() {
     if (message.type === 'error') showCommandError(message.message || 'The command was rejected.');
     if (message.type === 'ack' && message.id === app.lastUiCommand && !app.state?.error) showCommandError('');
   });
-  socket.addEventListener('close', () => {
+  socket.addEventListener('close', (event) => {
     if (app.socket !== socket) return;
     clearPressed(false, false);
     clearPendingParameters();
     setControlAvailability(false);
+    if (event.code === 4401) {                                   // access token missing or wrong
+      setConnection('offline', 'Access denied');
+      showCommandError('This server needs an access token. Open the link you were given (it contains ?token=…).');
+      return;
+    }
+    if (event.code === 4404) {                                   // the private simulation expired: start a new one
+      setConnection('offline', 'Session expired, starting a new one…');
+      app.reconnectTimer = setTimeout(() => { loadConfig().then((ok) => { if (ok) connect(); }); }, 900);
+      return;
+    }
     setConnection('offline', 'Reconnecting…');
     app.reconnectTimer = setTimeout(connect, 900);
   });
@@ -652,22 +663,56 @@ function renderLoop() {
   requestAnimationFrame(renderLoop);
 }
 
-async function initialize() {
-  wireControls();
-  wireKeyboard();
-  setControlAvailability(false);
+function showSession(session) {
+  const badge = $('session-badge');
+  if (!session) { badge.hidden = true; return; }
+  badge.hidden = false;
+  badge.textContent = session.shared ? 'Shared world' : `Session ${session.id} · ${session.count}/${session.max}`;
+  badge.title = session.shared
+    ? 'One simulation shared by every visitor'
+    : `Your private simulation (id ${session.id}). ${session.count} of ${session.max} running; stopped after ${Math.round(session.idle_timeout / 60)} min without a connection.`;
+}
+
+async function loadConfig() {
+  // The query string (?n=6&mode=auto&seed=3) sets up the visitor's private simulation on first load.
   let response;
   try {
-    response = await fetch('/api/config', { cache: 'no-store' });
-    if (!response.ok) throw new Error(`Configuration request failed (${response.status})`);
-    app.config = await response.json();
+    response = await fetch('/api/config' + location.search, { cache: 'no-store', credentials: 'same-origin' });
   } catch (error) {
     setConnection('offline', 'Service unavailable');
     showCommandError(error.message);
     $('scene-error').hidden = false;
     $('scene-error').querySelector('span').textContent = 'Start the local service, then reload this page.';
-    return;
+    return false;
   }
+  if (response.status === 401) {
+    setConnection('offline', 'Access denied');
+    showCommandError('This server needs an access token. Open the link you were given (it contains ?token=…).');
+    return false;
+  }
+  if (response.status === 409) {
+    const body = await response.json().catch(() => ({}));
+    setConnection('offline', 'Server full');
+    showCommandError(`${body.error || 'The server is full.'} Retrying automatically…`);
+    app.reconnectTimer = setTimeout(() => { loadConfig().then((ok) => { if (ok) connect(); }); }, 20000);
+    return false;
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    setConnection('offline', 'Service error');
+    showCommandError(body.error || `Configuration request failed (${response.status})`);
+    return false;
+  }
+  app.config = await response.json();
+  showSession(app.config.session);
+  return true;
+}
+
+async function initialize() {
+  wireControls();
+  wireKeyboard();
+  setControlAvailability(false);
+  if (!(await loadConfig())) return;
   buildParameters(app.config.parameters || []);
   setupCameras(app.config);
   try {

@@ -1,0 +1,19 @@
+# systemd *user* unit for the simulator web server (loopback only; published by the tunnel).
+#   mkdir -p ~/.config/systemd/user && cp deploy/blimp-web.service ~/.config/systemd/user/
+#   edit WorkingDirectory, the --public-host value and MUJOCO_GL if needed, then
+#   systemctl --user daemon-reload && systemctl --user enable --now blimp-web
+#   loginctl enable-linger $USER      # keep user services running without an open login session
+[Unit]
+Description=Blimp and rover simulator web server (per-visitor sessions)
+After=network.target
+
+[Service]
+WorkingDirectory=%h/Documents/blimp-bot-interaction
+Environment=MUJOCO_GL=egl
+ExecStart=%h/Documents/blimp-bot-interaction/.venv/bin/python web_server.py --no-browser --port 8000 \
+    --rovers-backend mujoco --max-sessions 8 --idle-timeout 600 --public-host blimp.example.org
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

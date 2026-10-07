@@ -1,0 +1,15 @@
+# systemd *user* unit running the named Cloudflare Tunnel from ~/.cloudflared/config.yml.
+# (Alternative: `sudo cloudflared service install` creates a system service from the same config.)
+#   cp deploy/cloudflared.service ~/.config/systemd/user/ && systemctl --user enable --now cloudflared
+[Unit]
+Description=Cloudflare Tunnel for the blimp simulator
+After=network-online.target blimp-web.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run blimp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -161,6 +161,9 @@ a smoke test over a remote desktop. This script cannot run on a headless machine
 .venv/bin/python -m unittest discover -s sim/tests -t .                 # before and after changes
 ```
 
+To publish the running server as a website for people who install nothing (Cloudflare Tunnel
+with a login, private simulation per visitor), continue with [DEPLOY.md](DEPLOY.md).
+
 `README.md` documents the simulator, controls and file layout; `AGENTS.md` records project
 decisions, verified results and their limits — read it before changing the simulator, and
 append to it after verified work.

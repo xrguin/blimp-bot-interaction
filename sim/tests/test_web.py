@@ -334,7 +334,8 @@ class WebTests(unittest.TestCase):
         return self.client.websocket_connect("ws://127.0.0.1/ws", **kwargs)
 
     def test_http_config_export_and_host_restriction(self):
-        self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
+        health = self.client.get("/health").json()
+        self.assertEqual((health["status"], health["sessions"], health["max_sessions"]), ("ok", 1, 1))   # shared world
         self.assertEqual(len(self.client.get("/api/config").json()["parameters"]), 22)
         response = self.client.get("/api/log.npz")
         self.assertEqual(response.status_code, 200)

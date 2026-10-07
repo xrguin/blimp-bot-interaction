@@ -124,6 +124,7 @@ class SimulationRuntime:
         self.P = SimParams(seed=seed, rover_backend=rover_backend)
         self.P.task.n_rovers = n
         self.cameras = bool(cameras)
+        self.controller = None              # token of the WebSocket connection that currently controls this runtime
         self._frames = None                 # (frame_meta, {name: rgb}) from the latest render
         self._encoded = {}                  # name -> (frame id, bytes, media type)
         self.sim = TeamSim(self.P)
