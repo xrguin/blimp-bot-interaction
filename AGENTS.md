@@ -48,6 +48,7 @@ Primary sources: `README.md` describes the implemented simulator; `docs/PLAN.md`
 | `web_server.py` | Loopback HTTP/WebSocket server; per-visitor sessions, public hosts, access token, browser launch |
 | `sim/web_sessions.py` | Session manager: cookie identity, concurrent cap, idle reaper, shared mode |
 | `DEPLOY.md`, `deploy/` | Website publishing guide (Cloudflare Tunnel + Access), tunnel config example, systemd user units |
+| `OPERATIONS.md` | Day-to-day operation of the live site on this machine (status, logs, restart, settings, troubleshooting, yearly renewal) |
 | `web/` | HTML controls, telemetry, 3D scene, and offline vendor assets |
 | `requirements-web.txt` | Tested browser-server dependencies |
 | `Start Web GUI.command` | macOS launcher using the project virtual environment |
@@ -745,3 +746,4 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   by the page with a 20 s retry); unconnected reservations expire after 60 s, reservations are
   bounded at 8× the cap, default idle timeout is 180 s, `/health` reports running and reserved.
   65 tests pass; services restarted with the new code.
+- `OPERATIONS.md` added at the user's request with the daily/occasional steps for the live site.

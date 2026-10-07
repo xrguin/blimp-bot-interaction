@@ -315,6 +315,7 @@ visible, with the slider handle at the nearest limit.
     requirements-mujoco.txt  optional MuJoCo + OpenCV dependencies for --rovers-backend mujoco
     INSTALL.md          from-scratch Ubuntu setup and verification guide
     DEPLOY.md           publishing as a website: tunnel, login, per-visitor sessions; deploy/ holds the unit files
+    OPERATIONS.md       day-to-day running of the live site (status, logs, restart, settings, troubleshooting)
     sim/web_sessions.py per-visitor simulation sessions (cookie identity, cap, idle reaper, shared mode)
     teleop_blimp.py     keyboard teleop entry point (+ --self-test)
     sim/tests/          verification
