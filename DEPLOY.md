@@ -18,12 +18,20 @@ Prerequisite: the server itself installed and verified per [INSTALL.md](INSTALL.
   `--idle-timeout` seconds (default 600) are stopped and removed; the page then starts a fresh
   one on reconnect. Each viewer polls about 0.5 MB/s of camera JPEG, so three viewers need
   roughly 12 Mbit/s of **upload** bandwidth from the host.
-- **Measured capacity (i7-13700F, RTX 3060 Ti, 62 GB).** Load test with N private sessions,
-  each with 4 MuJoCo rovers, 5 cameras at 640×480 and a simulated viewer polling at browser
-  rates: N = 1–6 all kept exactly real time (factor 1.00) at about one CPU core in total, ~20 MB
-  RAM per session and ~40 % GPU; at N = 8 every session dropped to 0.38× real time. All sessions
-  run in one Python process, so the interpreter lock is the ceiling, not RAM or the GPU.
-  Conservative setting for this machine: `--max-sessions 4`; raise to 6 only if the uplink allows.
+- **Measured capacity (i7-13700F, RTX 3060 Ti, 62 GB), real clients.** N browsers-worth of
+  clients (WebSocket state stream + camera polling at browser rates) against one server
+  process, each with a private 4-rover MuJoCo session and five cameras:
+
+  | users | real-time factor per session | server CPU | camera traffic (640×480 / 320×240) |
+  | --- | --- | --- | --- |
+  | 4 | 0.96–0.98 | 1.2–1.4 cores | 5.7 / 2.1 Mbit/s |
+  | 6 | 0.72 (0.80 at 320×240) | 1.5–1.7 cores | 8.4 / 3.1 Mbit/s |
+  | 7–8 | 0.46–0.57 | 1.9–2.0 cores | 10 / 4 Mbit/s |
+
+  Every session shares **one Python process**, so the interpreter lock — not RAM (~20 MB per
+  session), the 24 threads or the GPU (30–50 %) — sets the ceiling. `--camera-size 320x240`
+  cuts bandwidth almost three-fold but barely moves the ceiling. **Use `--max-sessions 4` per
+  process** (3 is comfortable); to serve more people, run more processes (below).
 - **Network.** The server still binds to `127.0.0.1`. `--public-host blimp.example.org` makes it
   accept that hostname (Host header, `wss://` origin) and mark cookies `Secure` for it.
 - **Authentication.** Cloudflare Access (below) authenticates people before any request reaches
@@ -242,6 +250,34 @@ count, session cap or to add `--access-token`. The web server always renders thr
 (`MUJOCO_GL=egl` is its default even with a display): GLFW's X11 layer is not thread-safe and
 aborted the process when several sessions created renderers at once. On NVIDIA machines the
 EGL vendor file is selected automatically (see INSTALL.md §7).
+
+## 2b. More than four users: several server processes behind one sticky proxy (untested recipe)
+
+Start K copies of the server on different ports, each capped at 4 sessions, and put a reverse
+proxy in front that pins each visitor to one copy with its own cookie. Point the tunnel at the
+proxy instead of port 8000. With [Caddy](https://caddyserver.com/) (single binary):
+
+```sh
+$ .venv/bin/python web_server.py --no-browser --port 8101 --rovers-backend mujoco --max-sessions 4 --public-host blimp.yourdomain.com &
+$ .venv/bin/python web_server.py --no-browser --port 8102 --rovers-backend mujoco --max-sessions 4 --public-host blimp.yourdomain.com &
+```
+
+`Caddyfile`:
+
+```
+:8000 {
+    reverse_proxy 127.0.0.1:8101 127.0.0.1:8102 {
+        lb_policy cookie blimp_backend     # Caddy sets this cookie and keeps a visitor on one process
+        health_uri /health
+    }
+}
+```
+
+`caddy run --config Caddyfile` and keep `service: http://127.0.0.1:8000` in the tunnel config.
+Two processes gave 4 + 4 sessions in the measurement above; the GPU and 24 CPU threads have
+room for three or four such processes. The WebSocket upgrade is proxied by Caddy automatically.
+This arrangement is documented from the measurements and Caddy's documentation; it has not been
+exercised end to end here.
 
 ## 3. Quick public link without a domain (demo only)
 

@@ -269,6 +269,8 @@ def main():
     parser.add_argument("--cameras", dest="cameras", action="store_true", default=None,
                         help="render the rover/blimp cameras and stream them to the browser (default with --rovers-backend mujoco)")
     parser.add_argument("--no-cameras", dest="cameras", action="store_false", help="disable the camera streams")
+    parser.add_argument("--camera-size", default="640x480", metavar="WxH",
+                        help="camera resolution for every session (default 640x480; 320x240 quarters render, encode and bandwidth cost)")
     parser.add_argument("--shared", action="store_true", help="one simulation shared by all visitors instead of a private one per visitor")
     parser.add_argument("--max-sessions", type=int, default=8, help="cap on concurrent private simulations")
     parser.add_argument("--max-rovers", type=int, default=8, help="largest rover count a visitor may request with ?n=")
@@ -285,7 +287,14 @@ def main():
     if not 1 <= args.max_rovers <= 32:
         parser.error("--max-rovers must be between 1 and 32")
     cameras = cameras_enabled(args.rovers_backend, args.cameras)
-    defaults = dict(n=args.n, seed=args.seed, mode=args.mode, rovers_mode=args.rovers, rover_backend=args.rovers_backend, cameras=cameras)
+    try:
+        camera_size = tuple(int(v) for v in args.camera_size.lower().split("x"))
+        if len(camera_size) != 2:
+            raise ValueError
+    except ValueError:
+        parser.error("--camera-size must look like 640x480")
+    defaults = dict(n=args.n, seed=args.seed, mode=args.mode, rovers_mode=args.rovers, rover_backend=args.rovers_backend,
+                    cameras=cameras, camera_size=camera_size)
 
     def factory(**options):
         return SimulationRuntime(**{**defaults, **options})

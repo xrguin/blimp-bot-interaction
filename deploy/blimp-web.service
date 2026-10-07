@@ -1,6 +1,6 @@
 # systemd *user* unit for the simulator web server (loopback only; published by the tunnel).
 #   mkdir -p ~/.config/systemd/user && cp deploy/blimp-web.service ~/.config/systemd/user/
-#   edit WorkingDirectory, the --public-host value and MUJOCO_GL if needed, then
+#   edit WorkingDirectory and the --public-host value (keep --max-sessions 4 per process; see DEPLOY.md 2b), then
 #   systemctl --user daemon-reload && systemctl --user enable --now blimp-web
 #   loginctl enable-linger $USER      # keep user services running without an open login session
 [Unit]

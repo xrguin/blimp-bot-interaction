@@ -108,7 +108,7 @@ class SimulationRuntime:
     """
     KEY_TIMEOUT = 0.35
 
-    def __init__(self, n=4, seed=0, mode="teleop", rovers_mode="circle", rover_backend="ideal", cameras=False):
+    def __init__(self, n=4, seed=0, mode="teleop", rovers_mode="circle", rover_backend="ideal", cameras=False, camera_size=None):
         if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= 32:
             raise ValueError("Rover count must be between 1 and 32")
         if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**32:
@@ -123,6 +123,11 @@ class SimulationRuntime:
         # simulator is built without them and the first frames are rendered when the worker starts.
         self.P = SimParams(seed=seed, rover_backend=rover_backend)
         self.P.task.n_rovers = n
+        if camera_size is not None:
+            width, height = camera_size
+            if not (64 <= int(width) <= 1920 and 48 <= int(height) <= 1080):
+                raise ValueError("Camera size must be between 64x48 and 1920x1080")
+            self.P.mujoco.cam_width, self.P.mujoco.cam_height = int(width), int(height)
         self.cameras = bool(cameras)
         self.controller = None              # token of the WebSocket connection that currently controls this runtime
         self._frames = None                 # (frame_meta, {name: rgb}) from the latest render

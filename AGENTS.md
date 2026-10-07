@@ -710,3 +710,16 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   creation with a module lock. The load test then ran to N = 8 without errors.
 - Limits: viewers were simulated in-process (no real HTTP/WebSocket encoding cost, which adds
   some asyncio work per viewer); N = 7 was not measured; results are for this machine only.
+
+## Real-client capacity measurement — 2026-10-07
+
+- User concluded "we can let 6 users run" from the in-process test. Re-measured with real
+  clients against a running `web_server.py` (httpx + websockets: state stream, Run command,
+  camera polling with If-None-Match at browser rates): 4 users 0.96–0.98× real time, 6 users
+  0.72×, 7 users 0.57×, 8 users 0.46×; server CPU 1.2–2.0 cores; camera traffic 1.4 Mbit/s
+  per viewer at 640×480. Added `--camera-size WxH` (SimulationRuntime `camera_size`): 320×240
+  cut traffic to 0.5 Mbit/s per viewer but only lifted 6 users to 0.80×, so the limit is the
+  per-session Python work in one process, not cameras. Recommendation recorded: 4 sessions per
+  process (3 comfortable); more users via several processes behind a cookie-sticky proxy
+  (Caddy recipe in DEPLOY.md 2b, documented but not run — no proxy installed here).
+- Load scripts live in the session scratchpad only; results are for this machine.
