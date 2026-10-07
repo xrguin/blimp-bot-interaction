@@ -747,3 +747,7 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   bounded at 8× the cap, default idle timeout is 180 s, `/health` reports running and reserved.
   65 tests pass; services restarted with the new code.
 - `OPERATIONS.md` added at the user's request with the daily/occasional steps for the live site.
+- Created the `dev` worktree at `~/Documents/blimp-bot-dev` (branch `dev` from `mujoco`) for
+  local development; the live folder stays release-only. The user plans to move the host to a
+  different desktop; OPERATIONS.md now has the exact migration and hand-over steps, and this
+  machine will continue as the development machine.

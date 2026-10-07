@@ -98,6 +98,53 @@ Useful additions: `--camera-size 320x240` (quarter the bandwidth), `--max-rovers
 
 The site state is entirely in memory: there is nothing to back up for visitors' sessions.
 
+## Development next to the live site
+
+Edit code only in the development worktree, never in the live folder:
+
+| Folder | Branch | Purpose |
+| --- | --- | --- |
+| `~/Documents/blimp-bot-interaction` | `mujoco` | the live site; only `git pull`, tests, `systemctl --user restart blimp-web` |
+| `~/Documents/blimp-bot-dev` | `dev` | experiments and new features; local servers on another port: `python web_server.py --port 8010` |
+
+Promote finished work: in the dev folder `git checkout mujoco && git merge dev && git push && git checkout dev`;
+then in the live folder `git pull`, run the tests, restart the service. New Python packages for
+experiments go into a separate env (`conda create -n blimp-dev --clone mujoco`), not into `mujoco`.
+
+## Moving the host to another machine
+
+The link follows the tunnel, not the machine. Run the site on **one** machine at a time.
+
+On the **new** machine:
+
+```sh
+# 1. code + environment (INSTALL.md steps 1-4), then cloudflared (DEPLOY.md A1)
+git clone git@github.com:xrguin/blimp-bot-interaction.git ~/Documents/blimp-bot-interaction
+cd ~/Documents/blimp-bot-interaction && git checkout mujoco
+python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-web.txt -r requirements-mujoco.txt -r requirements-web-dev.txt
+.venv/bin/python -m unittest discover -s sim/tests -t .          # OK
+# 2. tunnel identity: copy from the old machine (secret!) -- all three files
+mkdir -p ~/.cloudflared && scp OLD:~/.cloudflared/{config.yml,cert.pem,99bc59f9-40e1-4d49-9c67-8f57b8d8386e.json} ~/.cloudflared/
+sed -i "s#/home/xzha/#$HOME/#" ~/.cloudflared/config.yml         # credentials-file path
+cloudflared tunnel ingress validate                               # OK
+# 3. services (the template uses .venv; edit ExecStart if you use a conda env or another path)
+mkdir -p ~/.config/systemd/user && cp deploy/blimp-web.service deploy/cloudflared.service ~/.config/systemd/user/
+sed -i "s/blimp.example.org/blimp-bot-simulator.com/; s/--idle-timeout 600/--idle-timeout 180/" ~/.config/systemd/user/blimp-web.service
+sed -i "s#/usr/bin/cloudflared#$(which cloudflared)#" ~/.config/systemd/user/cloudflared.service
+systemctl --user daemon-reload && systemctl --user enable --now blimp-web cloudflared && loginctl enable-linger $USER
+curl -s http://127.0.0.1:8000/health                              # {"status":"ok",...}
+```
+
+On the **old** machine, right after the new one is up:
+
+```sh
+systemctl --user disable --now blimp-web cloudflared              # stop and do not start at boot
+```
+
+Then check <https://blimp-bot-simulator.com> from a phone. Nothing else changes on Cloudflare.
+If the old machine must keep its tunnel files for a while, that is fine as long as its
+`cloudflared` service stays disabled (two hosts on one tunnel would split visitors' sessions).
+
 ## Yearly
 
 Cloudflare renews `blimp-bot-simulator.com` automatically (about US$10.46/year, card on file,
