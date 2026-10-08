@@ -26,6 +26,7 @@ Primary sources: `README.md` describes the implemented simulator; `docs/PLAN.md`
 - Interface: localhost browser control panel with a bundled Three.js scene, readable telemetry, numeric fields paired with every slider, an altitude target, and NPZ/PNG export. The Matplotlib viewer remains available for existing GUI and video workflows.
 - Logging: NumPy NPZ export for blimp and rover transitions. A saved example is present in `results/circle.npz`; suitability for model training has not been audited in this review.
 - Altitude lesson: a separate automatic collector records neutral-trim vertical flights with complete state/action/next-state timing and source provenance. The first checked dataset contains 14,400 transitions in `results/altitude_lesson/2026-10-04_neutral_seed42`; no learned model has been fitted yet.
+- Onboard vision: configurable OV2640-style pinhole camera under the gondola, looking down, with live preview and synchronized PNG/state/action recording. Optics and mounting position are estimates until measured. No learned perception or hardware image-fidelity result is implied.
 
 ## Key files
 
@@ -39,8 +40,12 @@ Primary sources: `README.md` describes the implemented simulator; `docs/PLAN.md`
 | `sim/keyboard.py` | Keyboard mapping and hold assistance |
 | `sim/viewer.py` | GUI and video rendering |
 | `sim/web_runtime.py` | Single-owner simulation worker, command validation, snapshots, and NPZ export |
+| `sim/camera.py` | Camera calibration validation, NED/optical pose, and exact simulation-clock recording |
 | `web_server.py` | Loopback HTTP/WebSocket server and browser launch |
 | `web/` | HTML controls, telemetry, 3D scene, and offline vendor assets |
+| `web/camera-math.js`, `web/sensor-camera.js` | Calibrated projection, inverse lens distortion, and sensor-only rendering |
+| `web/camera-panel.js`, `web/zip.js` | Camera settings, live preview, and offline PNG/JSON archive export |
+| `config/camera_ov2640.example.json` | Uncalibrated default profile; replace optics and mounting pose with measurements |
 | `requirements-web.txt` | Tested browser-server dependencies |
 | `Start Web GUI.command` | macOS launcher using the project virtual environment |
 | `run_circle.py` | Autonomous circle scenario entry point |
@@ -85,7 +90,7 @@ Install dependencies only when required for an authorized task. Keyboard default
 - `docs/PLAN.md` still says "planning only (no code)". Its five-thruster/four-input design and lagged rover dynamics differ from the implemented six-thruster simulator and ideal rovers. `docs/PROBLEM_FORMULATION.md` also retains the planned state/input definitions.
 - Translational drag, added mass, yaw parameters, thrust, and actuator lag are marked as unmeasured/tunable in `sim/params.py`; passing simulator checks does not establish hardware fidelity.
 - The documents refer to `ICARV_08581376.pdf` as local, but it is absent from this checkout and explicitly ignored by Git. Source-paper parameter verification remains outstanding for this review.
-- Hardware geometry, thrust calibration, rover platform, camera orientation, and motion-capture/communication details remain design questions in the plan.
+- Hardware geometry, thrust calibration, rover platform, and motion-capture/communication details remain design questions in the plan. The camera is now specified as OV2640 beneath the gondola, looking down; intrinsics, distortion, mounting pose and actual sensor performance still require measurement.
 
 Suggested next work, subject to the user's chosen task: reconcile the design documents with v1; confirm hardware and parameter sources; audit transition timing and log metadata before dataset collection; then implement and evaluate the first learned module.
 
@@ -286,3 +291,256 @@ Suggested next work, subject to the user's chosen task: reconcile the design doc
   yaw and R producing positive yaw. Whitespace checks passed. No interactive browser
   session was restarted or visually tested; running simulators must restart to load the
   Python mapping, and browser pages should reload to show the updated key guide.
+
+## Simulated OV2640 camera and synchronized recording — 2026-10-05
+
+- User selected the OV2640 variant of Seeed XIAO ESP32-S3 Sense, mounted under the
+  gondola looking straight down, with live preview and synchronized recording. Kept
+  the existing Python/Three.js simulator and offline runtime; added no dependencies.
+- Added full-attitude optical pose, pinhole projection and OpenCV five-coefficient
+  Brown–Conrady distortion. Image top is body forward, right is body right. Ground
+  texture provides motion cues; sensor images exclude debug overlays but retain
+  physical geometry, self-occlusion and shadows.
+- Defaults are explicit assumptions: 640 × 480 at 10 simulated fps, 60-degree horizontal
+  field of view, centred principal point, zero distortion, lens 2 mm below the gondola
+  box (0.312 m body-down from CV, about 13 mm above ground at startup). These are not
+  measured lens or throughput specifications. Sensor placement does not add payload
+  mass or change the existing ground-contact geometry.
+- Import/export full camera profiles or compact OpenCV-style JSON. Intrinsics scale
+  with pixel-centre convention and fixed aspect ratio. The User optics badge covers
+  only intrinsics/distortion; the default mounting pose remains estimated. Invalid
+  backend settings restore accepted form values. Renderer failures clear stale images,
+  disable recording and wait for explicit retry or a changed profile.
+- Live preview is capped at 640 × 480 and 10 Hz; saved previews identify the actual
+  captured generation/control-step/time. Recorded output supports 320 × 240 through
+  1600 × 1200 and 5/10/20 simulated fps, independently of browser refresh. No measured
+  latency or real-time performance guarantee is made.
+- Recording retains the initial frame, scheduled exact control-tick states, the final
+  state, and every 20 Hz pre/post transition with actual blimp and clipped rover actions,
+  actuator targets and parameter metadata. Stops at 30 simulated seconds or on Stop,
+  Reset, disconnect or failure; pauses create no duplicates. A completed recording must
+  be explicitly discarded before another starts. It survives Reset but not server exit.
+- Export renders each retained pose in an independent scene into PNG files, then builds
+  a ZIP with recording.json and manifest.json, timestamps, action-interval indices,
+  intrinsics/poses, invalid-pixel fractions and SHA-256 hashes. Progress, cancel, retry
+  and a persistent Save ZIP link are provided. Large exports use more memory/time.
+- Passed 36 Python camera/web/altitude tests, five dynamics checks, nine keyboard checks,
+  five camera-math tests and nine camera-panel tests (64 total); whitespace checks pass.
+  GPT-5.6 Sol provided planning and final review; reported frontend issues were repaired.
+- Browser GPU preview was visually inspected at ground level and in flight with four
+  rovers. Tested invalid focal-length rejection/restoration and compact calibration import
+  with nonzero radial/tangential distortion, then restored estimated default optics.
+  No browser warnings/errors were observed. A 30-second test generated 301 images;
+  independently fetched JSON confirmed 301 unique scheduled states, 600 control intervals,
+  and exact image-state/pre-post alignment. The ZIP writer separately passed Python
+  archive/CRC inspection. The in-app browser download helper timed out for the actual
+  generated blob ZIP, so its OS-level save and complete image archive were not inspected.
+- Preview: results/web_gui_ov2640_camera.jpg. The isolated test server uses port 8001;
+  the older port-8000 session was not restarted. Existing sessions need a Python server
+  restart and page reload to load the camera backend. Existing experiments were preserved.
+- Limits: stylized scene; uncalibrated hardware fidelity; no sensor noise, exposure/white
+  balance, rolling shutter, motion blur, focus, OV2640 JPEG processing, microphone audio
+  or Wi-Fi delay model. Recording is not a full controller/RNG checkpoint for arbitrary
+  disturbed-flight replay. No visual world model was trained in this task.
+
+## Controls guide beneath Live World — 2026-10-05
+
+- User deferred online publication and requested control instructions beneath Live World;
+  confirmed movement keys, PID hold, release controls and pause. No deployment work was
+  performed. The public hosting/session choices remain unanswered.
+- Moved the keyboard guide from the sidebar to a dedicated card directly below the 3D
+  scene. It stays grouped with the scene when the camera panel stacks on smaller screens.
+  Added Teleop/Run/focus instructions and plain-language direction labels: W/S forward/back,
+  A/D slide left/right, Q/E up/down, F/R rotate left/right, H PID hold, Space release manual
+  input, Esc pause. Clarified heading-relative horizontal movement and continued momentum.
+- Only static HTML/CSS and documentation changed; physics, key mappings and input-focus
+  protection remain unchanged. GPT-5.6 Sol reviewed the layout plan and final source.
+- Visually verified the 1280-pixel browser layout, correct DOM ordering, one guide only,
+  no horizontal overflow and no browser warnings/errors. Existing flight remained paused
+  and was inspected as a spectator. Narrow-screen wrapping was reviewed in CSS, not tested
+  interactively. Whitespace checks passed; no new tests were needed for this static guide.
+- Preview: results/web_gui_controls_guide.jpg. Reload the browser to display the guide;
+  no Python restart is needed for this change.
+
+## Online deployment cancelled — 2026-10-05
+
+- User initially selected Render Free with independent visitor flights, then explicitly
+  cancelled publication and requested reverting to local operation.
+- No Render service was created, no public simulator URL was published, and no commit
+  or branch was pushed. Repository visibility remained private.
+- Removed the online deployment configuration and isolated visitor-session changes,
+  preserving the previously authorized local simulator, OV2640 camera/recording and
+  controls guide. Restored the original main branch and deleted the unused deployment
+  branch. All 36 original Python camera/web/altitude tests and 14 JavaScript tests pass;
+  whitespace checks and a search for remaining public-session code are clean.
+  GPT-5.6 Sol completed the final rollback review with no actionable findings.
+- Render was installed/connected during preparation; the user did not request removal
+  of that account connection, so it was left unchanged. No credentials were saved in
+  the project. Existing research results and the port-8001 user flight were preserved.
+- Stopped the disposable public-mode test server and started the normal loopback-only
+  local launcher on http://127.0.0.1:8002. Opened the browser as controller at t=0,
+  ground clearance 0 m, paused, with camera and controls guide present and no browser
+  warnings or errors. The original local startup commands remain unchanged.
+
+## Online deployment resumed — 2026-10-05
+
+- User reported granting Render access to this GitHub repository only, then explicitly
+  requested resuming full online deployment. The named Render connection now successfully
+  accesses My Workspace. Repository visibility must remain private.
+- Restoring the previously tested public-session layer with GPT-5.6 Sol planning/review.
+  The target is one native Python Render Free web service in Ohio, two visitor slots,
+  one worker and manual deployments. No database, paid service, or persistent disk is
+  needed. The normal localhost launcher and existing research files remain available.
+- Confirmed expiry will require an explicit Start new flight action, so idle browser
+  pages do not automatically reclaim capacity. Transient connections reuse their current
+  flight token. Tokens stay in page memory and never appear in request URLs.
+- Deployment configuration is documented in README; direct Render service creation is
+  used instead of a Blueprint. The active branch is codex/render-demo. Publication and
+  end-to-end verification are in progress; no successful deployment is claimed yet.
+- Restored-code checks: 49 backend tests and 25 JavaScript tests passed. A temporary
+  loopback browser preview with a shortened 25-second lifetime confirmed startup,
+  explicit expiry notice, no automatic reallocation, and Start new flight returning
+  to a fresh paused state. The stale expiry notice after restart was repaired.
+  The native browser timer wrapper regression is retained. Public host/origin rules
+  are tested separately from the loopback-only browser adapter.
+- Created blimp-bot-simulator in the confirmed My Workspace using the Render Free plan
+  in Ohio, two public sessions, one worker and auto-deploy off. Service ID:
+  srv-db1sc1bncjis73c5jp20; public address https://blimp-bot-simulator.onrender.com.
+  The first build deployed a34a37a on codex/render-demo and became live at 15:46 UTC.
+  The final camera-expiry race fix passed Sol review; all 26 JavaScript tests pass.
+- Verified two independent cloud visitors: one reached 2 m and recorded 301 camera
+  frames while the other remained paused at ground level; both then flew independently.
+  The browser generated the synchronized camera ZIP; the OS-saved archive was not inspected.
+  Cloud checks passed for health, unauthorized-export rejection, origin validation,
+  two-session capacity, and unavailable repository/results routes. No browser or Render
+  errors were observed during these checks.
+- Cloud QA exposed a biased speed readout under uneven server scheduling. Replaced the
+  average of reciprocal intervals with simulated/wall elapsed time across 20 intervals,
+  clearing history at flight/pause boundaries. Physics and scheduling are unchanged.
+  All 50 public/web/camera/altitude Python tests pass, including the timing regression;
+  the telemetry correction passed GPT-5.6 Sol review.
+- Final application commit 7b85097 deployed successfully at 15:56 UTC (Render deploy
+  dep-db1sgsqjnfac73eep52g). The public browser flight reached 1.02 m for a 1 m target
+  and displayed 1.00x real time; health returned OK and browser/Render error logs were
+  empty. The displayed flight was reset to paused t=0, height=0, target=0 for handoff.
+  This brief check is not a concurrency or latency guarantee for the Free plan.
+  Final screenshot: results/web_gui_render_live.jpg (local artifact, not served).
+
+## Modular world-model explanation — 2026-10-05
+
+- User selected this project's blimp-and-rover example, with animation and intuition
+  followed by key equations. Created an inline teaching visualization outside the
+  repository; simulator code, datasets, and trained-model status are unchanged.
+- Three views show separate module fitting, reuse of one rover model for 2/4/8
+  separate rover states, and candidate-future evaluation followed by one applied step.
+  The blimp fitting view explicitly groups separately fitted internal submodules.
+- The planning illustration uses hand-coded constant-speed rover and planar
+  constant-acceleration blimp motion. Its three candidates are scored over 4 s;
+  only the selected candidate's first 0.5 s is applied. It is not an experiment,
+  trained predictor, full project MPC implementation, or evidence of team-size transfer.
+- Explanation follows the proposed formulation's separate training objectives and
+  typed interfaces. Shared rover weights do not replace individual states, actions,
+  or inferred contexts. Formation coordination is imposed by planning objectives
+  and constraints; physically coupled tasks would require additional dynamics modules.
+- GPT-5.6 Sol supplied the plan and final source/concept review. JavaScript syntax
+  passed; browser checks covered stage changes, 2/4/8 rover selections, animation
+  completion, saved selection restoration, and readable 736/320-pixel layouts.
+  The preview reported no browser warnings/errors. No model was trained or evaluated.
+
+## Proposed abstraction, PDDL, and MZ research direction — 2026-10-05
+
+- User requested a concrete blimp–rover formulation starting from Kaelbling and
+  Lozano-Perez's hierarchical task-and-motion planning, combining compositional
+  abstraction/PDDL with Mori–Zwanzig (MZ) insights and conditional guarantees.
+- Reviewed the HPN paper, PDDLStream, MZ memory-approximation literature, the local
+  formulation, and current rover/blimp dynamics. GPT-5.6 Sol planned and reviewed
+  the proposed theoretical scope. This was a formulation discussion, not a novelty
+  survey, implemented planner, proved project theorem, or new experiment.
+- Proposed first setting: centralized, synchronized symbolic team macro-actions;
+  vehicles may move simultaneously within a macro-action. A candidate mission is
+  virtual-gate traversal followed by formation, subject to pairwise separation and
+  individual rover camera-visibility constraints. These tasks/constraints are proposed.
+- Preserve shared per-type motion models and independent module fitting. Current
+  rovers are ideal Markov unicycles; MZ memory should first be studied in reduced
+  blimp observables that omit actuator or swing state. Visibility/separation couple
+  planning; they do not create physical inter-rover forces in the current simulator.
+- Proposed contribution: select retained state/history using task-predicate margins.
+  A continuous refiner would return a trajectory and error tube tied to the current
+  history, enabling a symbolic action only when its initiation, invariant, terminal,
+  and frame-condition requirements are certified. PDDLStream is a candidate bridge.
+- Candidate theorem scope: a uniform executed-transition residual bound, Lipschitz
+  rollout propagation, and robust continuous predicate margins can certify a finite
+  accepted action sequence when terminal history tubes fit subsequent initiation
+  sets. Include intersample motion, controller state, synchronization, and bounded
+  termination. Online replanning safety alone does not prove eventual completion.
+- MZ identities do not establish memory decay, learned residual bounds, or symbolic
+  soundness automatically. The unresolved/orthogonal term must be bounded; finite
+  history need not define a unique true transition. Team-size-uniform claims also
+  require uniform module, policy, interface, and predicate bounds in an appropriate
+  norm. Hardware, arbitrary team sizes, completeness, and global stability are outside
+  this proposed first guarantee.
+- Proposed validation: matched reduced states with different histories; reduced-state
+  Markov, explicit-state, MZ, and equal-capacity history baselines; train on small teams
+  and test feasible larger teams; report predicate violations, accepted-action failures,
+  conservatism, task completion, and planning cost. No experiments or simulator changes
+  were performed. Existing research documents remain unchanged pending refinement.
+
+## Guided learning format and hidden-state lesson — 2026-10-05
+
+- User selected short lessons following Predict → Watch → Explain → Equation,
+  and correctly identified that hidden motion/actuator state can change a blimp's
+  next motion despite matching visible position and attitude.
+- Created a separate inline teaching animation with initial height and velocity
+  matched exactly, neutral buoyancy and zero commanded thrust in both cases,
+  but different realized initial thrust. An analytic vertical toy model isolates
+  actuator lag; its constants are illustrative, not project calibration or results.
+- Lesson distinguishes an adequate state containing realized thrust from a reduced
+  state that omits it. History may help infer omitted state; this example alone
+  establishes neither exact recovery from finite history nor an MZ theorem.
+- GPT-5.6 Sol planned and checked the lesson and analytic solution. JavaScript syntax,
+  browser playback completion, keyboard time scrubbing, and 736/320-pixel layouts
+  were checked; no browser warnings/errors were observed. Simulator code and data
+  are unchanged. Subsequent lessons on history, shared modules, symbolic planning,
+  and conditional guarantees remain instructional proposals.
+
+## Macro-action journal club and MZ research lesson — 2026-10-06
+
+- User selected intuition before equations and a focus on how MZ memory could
+  improve skill-level predictions. Reviewed the primary JAIR paper, Modeling and
+  Planning with Macro-Actions in Decentralized POMDPs, and primary MZ references.
+- The paper supplies asynchronous options and jointly planned local policies,
+  with decentralized execution. Its exact search is optimal only within the
+  supplied deterministic macro-policy class; approximate searches, learned models,
+  memory closures, and transfer across team sizes have no such automatic guarantee.
+- Created a separate inline teaching timeline for one blimp and two rovers.
+  An analytic lateral actuator/drag example has identical initial position and
+  velocity but initial realized thrust of 0 or 40 mN. With zero new command,
+  a speed-threshold/dwell rule finishes at 0.50 or 5.234 seconds. The chosen
+  reduced baseline assumes zero hidden thrust and predicts 0.50 seconds in both.
+  Ready/clear signals and rover travel times are illustrative assumptions.
+- This demonstrates omitted-state effects on skill timing. The zero-command
+  example has a decaying unresolved initial-state contribution; it is not an
+  identified MZ kernel, fitted world model, or project performance result.
+- Proposed research: learn history-conditioned skill outcomes and joint next-event
+  times/identities, retaining active skills and controller/elapsed-time state.
+  Compare reduced Markov, explicit-state, finite-memory, and recurrent baselines.
+  Conditional event-time bounds require reliable rollout-error bounds and robust
+  termination crossings; MZ alone does not establish these assumptions.
+- GPT-5.6 Sol provided the paper, research-scope, and final analytic/source reviews.
+  JavaScript syntax passed. Browser checks verified both conditions, full playback,
+  keyboard scrubbing, individual skill transitions, and readable 736/320-pixel
+  layouts without horizontal overflow; no warnings/errors were observed.
+- Simulator code, datasets, and adopted planner architecture remain unchanged.
+  Asynchronous decentralized planning is a research alternative to the earlier
+  proposed synchronized formulation, not an implemented replacement.
+
+## GitHub synchronization — 2026-10-07
+
+- User requested a GitHub push. Refreshed origin and confirmed all simulator code was
+  already synchronized on codex/render-demo at 309c335 before this update.
+- Included the pending research/teaching progress notes and the three referenced GUI
+  previews: controls guide, OV2640 camera, and live Render deployment.
+- GPT-5.6 Sol reviewed the commit scope and screenshots with no actionable findings;
+  whitespace checks passed. No simulator code changed, so code tests were not rerun.
+- Push destination remains the existing private repository's codex/render-demo branch.
+  This update does not merge main or request another Render deployment.

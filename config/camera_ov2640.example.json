@@ -1,0 +1,59 @@
+{
+  "schema_version": "xiao-camera-v1",
+  "sensor": "OV2640",
+  "calibration_status": "estimated",
+  "width": 640,
+  "height": 480,
+  "fps": 10,
+  "reference_width": 640,
+  "reference_height": 480,
+  "K": [
+    [
+      554.2562584220409,
+      0.0,
+      319.5
+    ],
+    [
+      0.0,
+      554.2562584220409,
+      239.5
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "D": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "translation_body_m": [
+    0.0,
+    0.0,
+    0.312
+  ],
+  "rotation_optical_to_body": [
+    [
+      0.0,
+      -1.0,
+      0.0
+    ],
+    [
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "near_m": 0.001,
+  "far_m": 50.0,
+  "notes": "Uncalibrated placeholder: 60 degree horizontal field of view, zero distortion. Optical centre 2 mm below the gondola box; image top is body forward. Replace with measured intrinsics and mounting pose."
+}

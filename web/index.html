@@ -13,7 +13,7 @@
       <div class="brand-block">
         <span class="brand-mark" aria-hidden="true"></span>
         <div>
-          <p class="eyebrow">Local simulation</p>
+          <p id="session-mode" class="eyebrow">Simulation</p>
           <h1>Blimp Team Console</h1>
         </div>
       </div>
@@ -23,9 +23,17 @@
         <span id="control-badge" class="badge muted">Waiting</span>
       </div>
     </header>
+    <section class="session-info" aria-label="Flight session" aria-live="polite">
+      <p id="session-details">Connecting to the simulation service…</p>
+      <p id="session-notice" class="session-notice" hidden></p>
+      <p id="flight-limit" class="session-notice" hidden></p>
+      <button id="start-new-flight" class="button secondary" type="button" hidden>Start new flight</button>
+    </section>
 
     <main class="workspace">
       <section class="visual-column" aria-label="Simulation view">
+        <div class="view-grid">
+        <div class="world-column">
         <div id="scene-panel" class="scene-panel">
           <canvas id="scene-canvas" tabindex="0" aria-label="Three-dimensional blimp and rover scene"></canvas>
           <div class="scene-overlay scene-title">
@@ -46,6 +54,69 @@
             <span><i class="legend-line force"></i>Thruster force</span>
             <span><i class="legend-line reference"></i>Reference</span>
           </div>
+        </div>
+
+        <section class="flight-guide" aria-labelledby="flight-guide-title">
+          <h2 id="flight-guide-title">Blimp controls</h2>
+          <p class="flight-guide-intro">Select <strong>Teleop</strong>, press <strong>Run</strong>, then click the 3D view and hold a key to fly.</p>
+          <dl class="flight-keys">
+            <div><dt><kbd>W</kbd><kbd>S</kbd></dt><dd>Forward / backward</dd></div>
+            <div><dt><kbd>A</kbd><kbd>D</kbd></dt><dd>Slide left / right</dd></div>
+            <div><dt><kbd>Q</kbd><kbd>E</kbd></dt><dd>Up / down</dd></div>
+            <div><dt><kbd>F</kbd><kbd>R</kbd></dt><dd>Rotate left / right</dd></div>
+          </dl>
+          <div class="flight-shortcuts">
+            <span><kbd>H</kbd> PID hold on / off</span>
+            <span><kbd>Space</kbd> Release manual input</span>
+            <span><kbd>Esc</kbd> Pause</span>
+          </div>
+          <p class="flight-guide-note">Horizontal directions follow the blimp’s nose. Releasing input does not instantly stop motion.</p>
+        </section>
+        </div>
+
+        <section class="sensor-card" aria-label="Onboard camera">
+          <div class="section-heading"><div><p class="eyebrow">Onboard · looking down</p><h2>XIAO OV2640</h2></div><span id="sensor-calibration" class="badge paused">Estimated optics</span></div>
+          <div class="sensor-image"><canvas id="sensor-canvas" width="640" height="480" tabindex="0" aria-label="Simulated downward-facing OV2640 camera"></canvas></div>
+          <p id="sensor-clock" class="sensor-caption">Waiting for camera…</p>
+          <p id="sensor-ground-note" class="sensor-note">The camera is close to the floor. Take off to see the surroundings.</p>
+          <div class="sensor-actions"><button id="sensor-snapshot" class="button secondary" type="button" disabled>Save preview</button><button id="sensor-record" class="button" type="button" disabled>Record</button><button id="sensor-stop" class="button" type="button" disabled>Stop</button></div>
+          <p id="sensor-record-status" class="sensor-note">Record up to 30 seconds of simulation time.</p>
+          <div class="sensor-actions"><button id="sensor-download" class="button download" type="button" disabled>Download frames + data</button><button id="sensor-clear" class="button danger" type="button" disabled>Discard</button></div>
+          <p id="sensor-export-status" class="sensor-note" aria-live="polite"></p>
+          <a id="sensor-zip-link" class="button download" hidden>Save ZIP</a>
+          <button id="sensor-cancel-export" class="button secondary" type="button" hidden>Cancel export</button>
+          <p id="sensor-error" class="field-error" aria-live="polite"></p>
+          <button id="sensor-retry" class="button secondary" type="button" hidden>Retry camera</button>
+          <details class="sensor-settings"><summary>Camera settings &amp; calibration</summary>
+            <form id="sensor-settings">
+              <fieldset id="sensor-settings-fields" disabled>
+                <div class="sensor-fields">
+                  <label>Recording resolution<select id="sensor-resolution"><option value="320x240">320 × 240</option><option value="640x480" selected>640 × 480</option><option value="800x600">800 × 600</option><option value="1600x1200">1600 × 1200</option></select></label>
+                  <label>Recording frames / second<select id="sensor-fps"><option value="5">5</option><option value="10" selected>10</option><option value="20">20</option></select></label>
+                </div>
+                <p class="sensor-note">Optics at reference size: <span id="sensor-reference-size">640 × 480 pixels</span>. Output resizing preserves the field of view.</p>
+                <div class="sensor-fields four">
+                  <label>fx (px)<input id="sensor-fx" type="number" step="any" required></label><label>fy (px)<input id="sensor-fy" type="number" step="any" required></label>
+                  <label>cx (px)<input id="sensor-cx" type="number" step="any" required></label><label>cy (px)<input id="sensor-cy" type="number" step="any" required></label>
+                </div>
+                <p class="sensor-note">Lens distortion · OpenCV five-coefficient model</p>
+                <div class="sensor-fields four">
+                  <label>k1<input id="sensor-k1" type="number" step="any" required></label><label>k2<input id="sensor-k2" type="number" step="any" required></label>
+                  <label>p1<input id="sensor-p1" type="number" step="any" required></label><label>p2<input id="sensor-p2" type="number" step="any" required></label><label>k3<input id="sensor-k3" type="number" step="any" required></label>
+                </div>
+                <p class="sensor-note">Lens position from the centre of volume (m): forward, right, down. The default mount position is estimated; measure it separately from the optics.</p>
+                <div class="sensor-fields three">
+                  <label>Forward<input id="sensor-mount-x" type="number" step="any" required></label><label>Right<input id="sensor-mount-y" type="number" step="any" required></label><label>Down<input id="sensor-mount-z" type="number" step="any" required></label>
+                </div>
+                <button class="button" type="submit">Apply settings</button>
+                <label class="sensor-file">Import calibration / settings (.json)<input id="sensor-import" type="file" accept=".json,application/json"></label>
+              </fieldset>
+            </form>
+            <button id="sensor-save-settings" class="button secondary" type="button" disabled>Export settings</button>
+            <p class="sensor-note">60° horizontal angle and zero distortion are initial estimates. Calibrate at the same firmware crop and orientation. Sensor exposure, noise, rolling shutter, compression and Wi-Fi delay are not yet modeled.</p>
+          </details>
+          <p class="sensor-note subtle">Preview is limited to 640 × 480 and 10 Hz and may skip frames. Recordings use the selected resolution and cadence for every saved frame.</p>
+        </section>
         </div>
 
         <section class="instrument-grid" aria-label="Vehicle information">
@@ -112,13 +183,8 @@
             <button id="release-button" type="button" class="button secondary">Release controls <kbd>Space</kbd></button>
             <button id="reset-button" type="button" class="button danger">Reset</button>
           </div>
-          <a id="download-log" class="button download" href="/api/log.npz" download>Download NPZ log</a>
+          <button id="download-log" class="button download" type="button">Download NPZ log</button>
           <p id="command-error" class="command-error" aria-live="polite"></p>
-        </section>
-
-        <section class="key-guide" aria-label="Keyboard controls">
-          <div><kbd>W</kbd><kbd>S</kbd><span>Surge</span></div><div><kbd>A</kbd><kbd>D</kbd><span>Sway</span></div>
-          <div><kbd>Q</kbd><kbd>E</kbd><span>Up / down</span></div><div><kbd>F</kbd><kbd>R</kbd><span>Rotate left / right</span></div>
         </section>
 
         <section class="parameter-card">

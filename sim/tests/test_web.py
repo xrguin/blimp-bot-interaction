@@ -67,6 +67,37 @@ class ValidationTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_realtime_factor_measures_elapsed_time_and_clears_pause_history(self):
+        runtime = SimulationRuntime()
+        apply(runtime, "pause", value=False)
+        completed_at = 100.0
+        runtime._record_step_timing(completed_at)
+        self.assertEqual(runtime.realtime_factor, 0.0)  # First completion anchors the clock.
+        for interval in [0.01, 0.09] * 10:
+            completed_at += interval
+            runtime._record_step_timing(completed_at)
+        # 20 control intervals advance one simulated second in one wall second.
+        # Averaging per-interval speed would incorrectly report about 2.78x.
+        self.assertAlmostEqual(runtime.realtime_factor, 1.0)
+        for _ in range(20):
+            completed_at += 0.1
+            runtime._record_step_timing(completed_at)
+        self.assertAlmostEqual(runtime.realtime_factor, 0.5)
+        for stop_action in ("pause", "disconnect", "reset"):
+            if stop_action == "disconnect":
+                runtime._apply({"action": "disconnect"}, completed_at)
+            else:
+                apply(runtime, stop_action, **({"value": True} if stop_action == "pause" else {}))
+            self.assertEqual(runtime.realtime_factor, 0.0)
+            self.assertEqual(len(runtime._realtime_intervals), 0)
+            apply(runtime, "pause", value=False)
+            completed_at += 1000  # Paused time must not enter the resumed reading.
+            runtime._record_step_timing(completed_at)
+            self.assertEqual(runtime.realtime_factor, 0.0)
+            completed_at += 0.05
+            runtime._record_step_timing(completed_at)
+            self.assertAlmostEqual(runtime.realtime_factor, 1.0)
+
     def test_net_lift_grams_endpoints_metadata_and_unchanged_mass(self):
         runtime = SimulationRuntime()
         metadata = {entry["key"]: entry for entry in runtime.config()["parameters"]}

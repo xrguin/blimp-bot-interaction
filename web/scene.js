@@ -4,6 +4,30 @@ import { OrbitControls } from './vendor/three/OrbitControls.js';
 const ROVER_COLORS = [0xff8a52, 0x50d5a1, 0xffc65a, 0xe889c6, 0xa694ff, 0xff6f72, 0x4fc4f4, 0xc6db68];
 const MAX_TRAIL_POINTS = 500;
 
+function floorTexture(arena) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512; canvas.height = 512;
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#626d73';
+  context.fillRect(0, 0, 512, 512);
+  // A deterministic physical floor pattern provides texture without external assets.
+  let seed = 1729;
+  const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  for (let i = 0; i < 6500; i += 1) {
+    context.fillStyle = random() > 0.5 ? '#778187' : '#4d595f';
+    context.globalAlpha = 0.25 + random() * 0.35;
+    context.fillRect(random() * 512, random() * 512, 1 + random() * 3, 1 + random() * 3);
+  }
+  context.globalAlpha = 1;
+  context.strokeStyle = '#49565e'; context.lineWidth = 3;
+  context.strokeRect(1.5, 1.5, 509, 509);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping; texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(arena, arena); // One metre tiles, fixed in world coordinates.
+  return texture;
+}
+
 function worldPoint(ned) {
   return new THREE.Vector3(ned[0], -ned[2], ned[1]);
 }
@@ -92,13 +116,15 @@ class RoverView {
 }
 
 export class SimulationScene {
-  constructor(canvas, onUnavailable) {
+  constructor(canvas, onUnavailable, options = {}) {
     this.canvas = canvas;
     this.onUnavailable = onUnavailable;
+    this.options = options;
     this.ready = false;
     this.lastGeneration = null;
     this.rovers = [];
     this.thrusterLines = [];
+    this.sensorHelpers = [];
     this.defaultCamera = { position: new THREE.Vector3(5.6, 4.2, 6.3), target: new THREE.Vector3(0, 0.75, 0) };
   }
 
@@ -118,12 +144,14 @@ export class SimulationScene {
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.FogExp2(0x09151d, 0.035);
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.03, 120);
-    this.controls = new OrbitControls(this.camera, this.canvas);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.07;
-    this.controls.minDistance = 2;
-    this.controls.maxDistance = 18;
-    this.controls.maxPolarAngle = Math.PI * 0.49;
+    if (this.options.interactive !== false) {
+      this.controls = new OrbitControls(this.camera, this.canvas);
+      this.controls.enableDamping = true;
+      this.controls.dampingFactor = 0.07;
+      this.controls.minDistance = 2;
+      this.controls.maxDistance = 18;
+      this.controls.maxPolarAngle = Math.PI * 0.49;
+    }
     this.resetCamera();
 
     this.scene.add(new THREE.HemisphereLight(0xc8efff, 0x18232a, 1.65));
@@ -136,7 +164,7 @@ export class SimulationScene {
     const arena = Number(config.arena) || 6;
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(arena, arena),
-      new THREE.MeshStandardMaterial({ color: 0x0e2029, roughness: 0.96, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ map: floorTexture(arena), roughness: 0.96, metalness: 0 }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
@@ -146,6 +174,7 @@ export class SimulationScene {
     grid.material.transparent = true;
     grid.material.opacity = 0.62;
     this.scene.add(grid);
+    this.sensorHelpers.push(grid);
 
     const circlePts = [];
     for (let i = 0; i < 128; i += 1) {
@@ -159,12 +188,15 @@ export class SimulationScene {
     reference.computeLineDistances();
     this.referenceCircle = reference;
     this.scene.add(reference);
+    this.sensorHelpers.push(reference);
 
     this._buildBlimp(config.geometry || {});
     this._ensureRovers(config.n_rovers || 0, config.geometry?.rover_length || 0.28);
 
-    this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(this.canvas.parentElement);
+    if (this.options.interactive !== false && this.canvas.parentElement) {
+      this.resizeObserver = new ResizeObserver(() => this.resize());
+      this.resizeObserver.observe(this.canvas.parentElement);
+    }
     this.resize();
     this.ready = true;
     return true;
@@ -188,6 +220,7 @@ export class SimulationScene {
     );
     rings.scale.copy(envelope.scale);
     this.blimp.add(rings);
+    this.sensorHelpers.push(rings);
 
     const dVT = Number(geometry.d_VT) || 0.26;
     const gondolaSize = Array.isArray(geometry.gondola_size) ? geometry.gondola_size.map(Number) : [r * 0.82, r * 0.46, 0.10];
@@ -222,6 +255,7 @@ export class SimulationScene {
       const thrustLine = new THREE.Line(thrustGeometry, new THREE.LineBasicMaterial({ color: 0xff6f72 }));
       holder.add(thrustLine);
       this.thrusterLines.push({ line: thrustLine, positions: thrustPositions, axis });
+      this.sensorHelpers.push(thrustLine);
       this.blimp.add(holder);
     }
     this.scene.add(this.blimp);
@@ -229,6 +263,7 @@ export class SimulationScene {
     this.forceArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.01, 0x45d9d2, 0.12, 0.07);
     this.forwardArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), r * 1.7, 0xe8f8ff, 0.13, 0.07);
     this.scene.add(this.forceArrow, this.forwardArrow);
+    this.sensorHelpers.push(this.forceArrow, this.forwardArrow);
   }
 
   _ensureRovers(count, length) {
@@ -238,7 +273,7 @@ export class SimulationScene {
     while (this.rovers.length > count) this.rovers.pop().dispose(this.scene);
   }
 
-  update(state, config) {
+  update(state, config, options = {}) {
     if (!this.ready || !state?.eta) return;
     const generationChanged = this.lastGeneration !== null && state.generation !== this.lastGeneration;
     this.lastGeneration = state.generation;
@@ -280,7 +315,7 @@ export class SimulationScene {
 
     const roverStates = state.rover_q || [];
     this._ensureRovers(roverStates.length, config?.geometry?.rover_length || 0.28);
-    this.rovers.forEach((rover, i) => rover.update(roverStates[i], !state.paused));
+    this.rovers.forEach((rover, i) => rover.update(roverStates[i], !state.paused && options.appendTrails !== false));
 
     const radius = state.params?.['task.circle_radius'];
     if (Number.isFinite(radius)) this.referenceCircle.scale.set(radius / 1.5, 1, radius / 1.5);
@@ -288,7 +323,8 @@ export class SimulationScene {
 
   resize() {
     if (!this.renderer) return;
-    const box = this.canvas.parentElement.getBoundingClientRect();
+    const box = this.options.interactive === false || !this.canvas.parentElement
+      ? { width: 640, height: 480 } : this.canvas.parentElement.getBoundingClientRect();
     const width = Math.max(1, Math.round(box.width));
     const height = Math.max(1, Math.round(box.height));
     this.renderer.setSize(width, height, false);
@@ -297,16 +333,49 @@ export class SimulationScene {
   }
 
   resetCamera() {
-    if (!this.camera || !this.controls) return;
+    if (!this.camera) return;
     this.camera.position.copy(this.defaultCamera.position);
-    this.controls.target.copy(this.defaultCamera.target);
-    this.controls.update();
+    if (this.controls) {
+      this.controls.target.copy(this.defaultCamera.target);
+      this.controls.update();
+    } else this.camera.lookAt(this.defaultCamera.target);
   }
 
   render() {
     if (!this.ready) return;
-    this.controls.update();
+    this.controls?.update();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  withSensorScene(callback) {
+    const objects = [...this.sensorHelpers, ...this.rovers.map((rover) => rover.trail)];
+    const visible = objects.map((object) => object.visible);
+    const fog = this.scene.fog;
+    objects.forEach((object) => { object.visible = false; });
+    this.scene.fog = null;
+    try { return callback(); }
+    finally {
+      objects.forEach((object, i) => { object.visible = visible[i]; });
+      this.scene.fog = fog;
+    }
+  }
+
+  dispose() {
+    this.ready = false;
+    this.resizeObserver?.disconnect();
+    this.controls?.dispose();
+    this.scene?.traverse((object) => {
+      object.geometry?.dispose();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!material) continue;
+        material.map?.dispose();
+        material.dispose();
+      }
+      object.shadow?.map?.dispose();
+    });
+    this.renderer?.dispose();
+    this.renderer?.forceContextLoss();
   }
 
   downloadPng() {
